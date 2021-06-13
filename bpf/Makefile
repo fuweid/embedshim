@@ -20,7 +20,8 @@ else
 	Q = @
 endif
 
-APPS := example
+APPS := example \
+		monitor
 
 BINARIES=$(patsubst %,$(OUTPUT)/%.bpf.o,$(APPS))
 
