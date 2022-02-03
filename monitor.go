@@ -50,7 +50,7 @@ func newMonitor(stateDir string) (_ *monitor, retErr error) {
 		}
 	}()
 
-	store, err := shimebpf.NewSchedProcessExitStore(shimebpf.DefaultBPFFs)
+	store, err := shimebpf.NewSchedProcessExitStore(stateDir)
 	if err != nil {
 		return nil, err
 	}

@@ -33,7 +33,9 @@ type TaskExitStatus struct {
 	ExittedTime   uint64
 }
 
-func NewSchedProcessExitStore(pinnedPath string) (*SchedProcessExitStore, error) {
+func NewSchedProcessExitStore(bpffsRoot string) (*SchedProcessExitStore, error) {
+	pinnedPath := filepath.Join(bpffsRoot, pinnedDir)
+
 	runningTasks, err := loadPinnedMap(filepath.Join(pinnedPath, bpfMapRunningTasks))
 	if err != nil {
 		return nil, fmt.Errorf("faild to load bpf map %s: %w", bpfMapRunningTasks, err)

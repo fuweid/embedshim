@@ -222,6 +222,7 @@ func (es *embedShim) Delete(ctx context.Context) (*runtime.Exit, error) {
 
 	// TODO: reconstruct the cleanup-resource
 	tid, _ := es.tm.monitor.idr.getID(es.bundle.Namespace, es.bundle.ID)
+	es.tm.monitor.idr.releaseID(es.bundle.Namespace, es.bundle.ID)
 	es.tm.monitor.store.DelExitedTask(tid)
 	es.tm.Delete(ctx, es.init.id)
 	return &runtime.Exit{

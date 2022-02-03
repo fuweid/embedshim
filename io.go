@@ -219,7 +219,7 @@ func newRuncPipeIO(uid, gid int, stdio stdio.Stdio) (_ runc.IO, err error) {
 		}
 	}
 	if option.OpenStderr {
-		stderr, err = openRWFifo(context.TODO(), stdio.Stdout, 0700)
+		stderr, err = openRWFifo(context.TODO(), stdio.Stderr, 0700)
 		if err != nil {
 			return nil, err
 		}

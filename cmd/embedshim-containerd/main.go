@@ -25,6 +25,7 @@ import (
 	_ "github.com/containerd/containerd/services/version"
 
 	_ "github.com/containerd/containerd/metrics/cgroups"
+	_ "github.com/containerd/containerd/pkg/cri"
 	_ "github.com/containerd/containerd/runtime/v1/linux"
 	_ "github.com/containerd/containerd/runtime/v2"
 	_ "github.com/containerd/containerd/runtime/v2/runc/options"

@@ -171,6 +171,7 @@ func (p *Init) openStdin(path string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open stdin fifo %s: %w", path, err)
 	}
+
 	p.stdin = sc
 	p.closers = append(p.closers, sc)
 	return nil

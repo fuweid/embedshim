@@ -68,6 +68,7 @@ func (e *Epoller) Run() error {
 			e.mu.Unlock()
 
 			unix.EpollCtl(e.efd, unix.EPOLL_CTL_DEL, int(ev.Fd), &unix.EpollEvent{})
+			unix.Close(int(ev.Fd))
 			cbFn()
 		}
 	}
