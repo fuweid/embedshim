@@ -17,7 +17,7 @@ So, this plugin aims to provide task runtime implementation with pidfd and
 eBPF sched_process_exit tracepoint to manage deamonless container with
 low overhead.
 
-## Overview(TODO)
+![embedshim-overview](docs/images/embedshim-overview.svg)
 
 ## Demos(TODO)
 
