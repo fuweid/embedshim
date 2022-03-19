@@ -1,3 +1,6 @@
 [submodule "bpf/libbpf"]
 	path = bpf/libbpf
 	url = https://github.com/libbpf/libbpf.git
+[submodule "bpf/vmlinux"]
+	path = bpf/vmlinux
+	url = https://github.com/fuweid/bpf-vmlinux.git
