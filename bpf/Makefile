@@ -12,7 +12,6 @@ INCLUDES := -I$(OUTPUT) -I./libbpf/include/uapi -I$(dir $(VMLINUX))
 
 ARCH := $(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm64/')
 
-
 # quiet or not
 ifeq ($(V),1)
 	Q =
@@ -20,8 +19,7 @@ else
 	Q = @
 endif
 
-APPS := example \
-		monitor
+APPS := pid_monitor
 
 BINARIES=$(patsubst %,$(OUTPUT)/%.bpf.o,$(APPS))
 
@@ -45,7 +43,7 @@ $(OUTPUT) $(OUTPUT)/libbpf:
 	$(Q)mkdir -p $@
 
 $(LIBBPF_OBJ): $(wildcard $(LIBBPF_SRC)/*.[ch] $(LIBBPF_SRC)/Makefile) | $(OUTPUT)/libbpf
-	$(Q)$(MAKE) -C $(LIBBPF_SRC) BUILD_STATIC_ONLY=1		\
+	$(Q)$(MAKE) -C $(LIBBPF_SRC) BUILD_STATIC_ONLY=1	\
 		OBJDIR=$(dir $@)/libbpf DESTDIR=$(dir $@)		\
 		INCLUDEDIR= LIBDIR= UAPIDIR=					\
 		install
