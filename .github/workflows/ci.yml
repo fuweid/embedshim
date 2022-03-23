@@ -5,6 +5,9 @@ on:
       - master
       - main
   pull_request:
+    branches:
+      - master
+      - main
 
 jobs:
   #
@@ -29,6 +32,18 @@ jobs:
         run: |
           echo "GOPATH=${{ github.workspace }}" >> $GITHUB_ENV
           echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
+      - name: install dependencies
+        shell: bash
+        run: |
+          echo "::group:: install dependencies"
+          echo "deb http://apt.llvm.org/focal/ llvm-toolchain-focal main" | sudo tee -a /etc/apt/sources.list
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo apt-get update -y
+          sudo apt-get install -y g++ libelf-dev clang-15 lld-15 llvm-15
+          make
+          echo "::endgroup::"
+        with:
+          working-directory: src/github.com/fuweid/embedshim
       - name: golangci-lint check
         uses: golangci/golangci-lint-action@v2
         with:

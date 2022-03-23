@@ -12,7 +12,7 @@ import (
 	"github.com/containerd/containerd/mount"
 )
 
-//go:generate cp ../../bpf/.output/monitor.bpf.o pid_monitor.bpf.o
+//go:generate cp ../../bpf/.output/pid_monitor.bpf.o pid_monitor.bpf.o
 var (
 	//go:embed pid_monitor.bpf.o
 	progByteCode []byte
