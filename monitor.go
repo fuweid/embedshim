@@ -30,7 +30,7 @@ type monitor struct {
 }
 
 func newMonitor(stateDir string) (_ *monitor, retErr error) {
-	idr, err := newIdAllocator(stateDir)
+	idr, err := newIDAllocator(stateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (m *monitor) subscribe(ns string, cid string, pid uint32, cb callbackFn) (r
 
 	nsInfo, err := getPidnsInfo(pid)
 	if err != nil {
-		return fmt.Errorf("failed to get pidns info: %w")
+		return fmt.Errorf("failed to get pidns info: %w", err)
 	}
 
 	if err := m.store.InsertRunningTask(pid, &shimebpf.TaskInfo{
@@ -205,7 +205,7 @@ func checkRuncInitAlive(ns, cid string, pid uint32) error {
 	found := false
 
 	fdDir := filepath.Join("/proc", strconv.Itoa(int(pid)), "fd")
-	err := filepath.Walk(fdDir, func(path string, info fs.FileInfo, err error) error {
+	err0 := filepath.Walk(fdDir, func(path string, info fs.FileInfo, _ error) error {
 		if found {
 			return nil
 		}
@@ -233,8 +233,8 @@ func checkRuncInitAlive(ns, cid string, pid uint32) error {
 		}
 		return nil
 	})
-	if err != nil {
-		return fmt.Errorf("failed to check runc-init process is alive: %w", err)
+	if err0 != nil {
+		return fmt.Errorf("failed to check runc-init process is alive: %w", err0)
 	}
 
 	if !found {

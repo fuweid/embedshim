@@ -118,7 +118,7 @@ func (es *embedShim) Exec(ctx context.Context, id string, opts runtime.ExecOpts)
 
 func (es *embedShim) Pids(ctx context.Context) ([]runtime.ProcessInfo, error) {
 	return []runtime.ProcessInfo{
-		runtime.ProcessInfo{
+		{
 			Pid: es.PID(),
 		},
 	}, nil
