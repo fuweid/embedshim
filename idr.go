@@ -21,7 +21,7 @@ type idAllocator struct {
 	db *bolt.DB
 }
 
-func newIdAllocator(storeDir string) (*idAllocator, error) {
+func newIDAllocator(storeDir string) (*idAllocator, error) {
 	db, err := bolt.Open(filepath.Join(storeDir, idrDBName), 0644, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open idAllocator db: %w", err)
