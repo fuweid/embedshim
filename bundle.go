@@ -1,76 +1,52 @@
-/*
-   Copyright The containerd Authors.
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
-*/
-
 package embedshim
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io/fs"
 	"os"
 	"path/filepath"
 
-	"github.com/containerd/containerd/identifiers"
 	"github.com/containerd/containerd/mount"
-	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/containerd/runtime"
-	"github.com/pkg/errors"
 )
 
-// Bundle represents an OCI bundle
-type Bundle struct {
-	// ID of the bundle
-	ID string
-	// Path to the bundle
-	Path string
-	// Namespace of the bundle
-	Namespace string
+var bundleFileMode fs.FileMode = 0711
+
+// bundle represents an OCI bundle.
+type bundle struct {
+	// id of the bundle
+	id string
+	// path to the bundle
+	path string
+	// namespace of the bundle
+	namespace string
 }
 
-// LoadBundle loads an existing bundle from disk
-func LoadBundle(ctx context.Context, state, id string) (*Bundle, error) {
-	ns, err := namespaces.NamespaceRequired(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Bundle{
-		ID:        id,
-		Path:      filepath.Join(state, ns, id),
-		Namespace: ns,
+// loadBundle loads an existing bundle from disk
+func loadBundle(stateDir, ns, id string) (*bundle, error) {
+	return &bundle{
+		id:        id,
+		path:      filepath.Join(stateDir, ns, id),
+		namespace: ns,
 	}, nil
 }
 
-// NewBundle returns a new bundle on disk
-func NewBundle(ctx context.Context, root, state, id, ns string, opts runtime.CreateOpts) (_ *Bundle, retErr error) {
-	if err := identifiers.Validate(id); err != nil {
-		return nil, errors.Wrapf(err, "invalid task id %s", id)
-	}
+// bundleApplyOpts is used to store metadata into bundle when newBundle
+type bundleApplyOpts func(*bundle) error
 
-	workDir := filepath.Join(root, ns, id)
-	stateDir := filepath.Join(state, ns, id)
+func newBundle(root, state, ns, id string, opts ...bundleApplyOpts) (_ *bundle, retErr error) {
+	var (
+		workDir  = filepath.Join(root, ns, id)
+		stateDir = filepath.Join(state, ns, id)
 
-	b := &Bundle{
-		ID:        id,
-		Path:      stateDir,
-		Namespace: ns,
-	}
+		b = &bundle{
+			id:        id,
+			path:      stateDir,
+			namespace: ns,
+		}
 
-	var paths []string
+		paths []string
+	)
+
 	defer func() {
 		if retErr != nil {
 			for _, d := range paths {
@@ -80,23 +56,32 @@ func NewBundle(ctx context.Context, root, state, id, ns string, opts runtime.Cre
 	}()
 
 	// create state directory for the bundle
-	if err := os.MkdirAll(filepath.Dir(b.Path), 0711); err != nil {
+	if err := os.MkdirAll(filepath.Dir(b.path), bundleFileMode); err != nil {
 		return nil, err
 	}
-	if err := os.Mkdir(b.Path, 0711); err != nil {
-		return nil, err
-	}
-	paths = append(paths, b.Path)
 
-	rootfs := filepath.Join(b.Path, "rootfs")
-	if err := os.MkdirAll(rootfs, 0711); err != nil {
+	if err := os.Mkdir(b.path, bundleFileMode); err != nil {
 		return nil, err
+	}
+	paths = append(paths, b.path)
+
+	rootfs := filepath.Join(b.path, "rootfs")
+	if err := os.MkdirAll(rootfs, bundleFileMode); err != nil {
+		return nil, err
+	}
+
+	// apply bundle content
+	for _, opt := range opts {
+		if err := opt(b); err != nil {
+			return nil, err
+		}
 	}
 
 	// create working directory for the bundle
-	if err := os.MkdirAll(filepath.Dir(workDir), 0711); err != nil {
+	if err := os.MkdirAll(filepath.Dir(workDir), bundleFileMode); err != nil {
 		return nil, err
 	}
+
 	if err := os.Mkdir(workDir, 0711); err != nil {
 		if !os.IsExist(err) {
 			return nil, err
@@ -110,39 +95,26 @@ func NewBundle(ctx context.Context, root, state, id, ns string, opts runtime.Cre
 	paths = append(paths, workDir)
 
 	// symlink workdir
-	if err := os.Symlink(workDir, filepath.Join(b.Path, "work")); err != nil {
+	if err := os.Symlink(workDir, filepath.Join(b.path, "work")); err != nil {
 		return nil, err
 	}
-
-	// write the spec to the bundle
-	if err := ioutil.WriteFile(filepath.Join(b.Path, configFilename), opts.Spec.Value, 0666); err != nil {
-		return nil, err
-	}
-
-	// write IO spec to the bundle
-	ioSpec, err := json.Marshal(opts.IO)
-	if err != nil {
-		return nil, err
-	}
-	if err := ioutil.WriteFile(filepath.Join(b.Path, iospecFilename), ioSpec, 0666); err != nil {
-		return nil, err
-	}
-	return b, err
+	return b, nil
 }
 
-// Delete a bundle atomically
-func (b *Bundle) Delete() error {
-	rootfs := filepath.Join(b.Path, "rootfs")
+// delete a bundle atomically
+func (b *bundle) delete() error {
+	rootfs := filepath.Join(b.path, "rootfs")
+
 	if err := mount.UnmountAll(rootfs, 0); err != nil {
-		return errors.Wrapf(err, "unmount rootfs %s", rootfs)
+		return fmt.Errorf("unmount rootfs %s: %w", rootfs, err)
 	}
+
 	if err := os.Remove(rootfs); err != nil && !os.IsNotExist(err) {
-		return errors.Wrap(err, "failed to remove bundle rootfs")
+		return fmt.Errorf("failed to remove bundle rootfs: %w", err)
 	}
 
-	workDir, werr := os.Readlink(filepath.Join(b.Path, "work"))
-
-	err := atomicDelete(b.Path)
+	workDir, werr := os.Readlink(filepath.Join(b.path, "work"))
+	err := atomicDelete(b.path)
 	if err == nil {
 		if werr == nil {
 			return atomicDelete(workDir)
@@ -158,7 +130,7 @@ func (b *Bundle) Delete() error {
 			return err
 		}
 	}
-	return errors.Wrapf(err, "failed to remove both bundle and workdir locations: %v", err2)
+	return fmt.Errorf("failed to remove both bundle and workdir locations: %w", err2)
 }
 
 // atomicDelete renames the path to a hidden file before removal

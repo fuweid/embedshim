@@ -18,9 +18,7 @@ package embedshim
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,7 +28,6 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/go-runc"
 	google_protobuf "github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
@@ -64,10 +61,6 @@ const (
 	RuncRoot = "/run/containerd/runc"
 	// InitPidFile name of the file that contains the init pid
 	InitPidFile = "init.pid"
-
-	configFilename = "config.json"
-
-	iospecFilename = ".iospec.json"
 )
 
 // NewRunc returns a new runc instance for a process
@@ -124,34 +117,6 @@ func (p *pidFile) Read() (int, error) {
 func newPidFile(bundle string) *pidFile {
 	return &pidFile{
 		path: filepath.Join(bundle, InitPidFile),
-	}
-}
-
-type iospecFile struct {
-	path string
-}
-
-func (iospec *iospecFile) Path() string {
-	return iospec.path
-}
-
-func (iospec *iospecFile) Read() (runtime.IO, error) {
-	io := runtime.IO{}
-
-	data, err := ioutil.ReadFile(iospec.path)
-	if err != nil {
-		return io, err
-	}
-
-	if err := json.Unmarshal(data, &io); err != nil {
-		return io, err
-	}
-	return io, nil
-}
-
-func newIospecFile(bundle string) *iospecFile {
-	return &iospecFile{
-		path: filepath.Join(bundle, iospecFilename),
 	}
 }
 

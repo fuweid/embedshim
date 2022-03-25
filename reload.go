@@ -57,34 +57,34 @@ func (tm *TaskManager) loadTasks(ctx context.Context) error {
 			continue
 		}
 
-		bundle, err := LoadBundle(ctx, tm.stateDir, id)
+		b, err := loadBundle(tm.stateDir, ns, id)
 		if err != nil {
 			return err
 		}
 
 		// fast path
-		bf, err := ioutil.ReadDir(bundle.Path)
+		bf, err := ioutil.ReadDir(b.path)
 		if err != nil {
-			bundle.Delete()
-			log.G(ctx).WithError(err).Errorf("fast path read bundle path for %s", bundle.Path)
+			b.delete()
+			log.G(ctx).WithError(err).Errorf("fast path read bundle path for %s", b.path)
 			continue
 		}
 
 		if len(bf) == 0 {
-			bundle.Delete()
+			b.delete()
 			continue
 		}
 
 		if _, err := tm.containers.Get(ctx, id); err != nil {
 			log.G(ctx).WithError(err).Errorf("loading container %s", id)
-			bundle.Delete()
+			b.delete()
 			continue
 		}
 
-		shim, err := tm.loadEmbedShim(ctx, bundle)
+		shim, err := tm.loadEmbedShim(ctx, b)
 		if err != nil {
 			log.G(ctx).WithError(err).Errorf("loading exiting container %s", id)
-			bundle.Delete()
+			b.delete()
 			continue
 		}
 		tm.tasks.Add(ctx, shim)
@@ -92,8 +92,8 @@ func (tm *TaskManager) loadTasks(ctx context.Context) error {
 	return nil
 }
 
-func (tm *TaskManager) loadEmbedShim(ctx context.Context, bundle *Bundle) (_ *embedShim, retErr error) {
-	init, err := reconstructInit(ctx, bundle)
+func (tm *TaskManager) loadEmbedShim(ctx context.Context, b *bundle) (_ *embedShim, retErr error) {
+	init, err := reconstructInit(ctx, b)
 	if err != nil {
 		return nil, err
 	}
@@ -107,46 +107,45 @@ func (tm *TaskManager) loadEmbedShim(ctx context.Context, bundle *Bundle) (_ *em
 		return nil, err
 	}
 
-	shim := newEmbedShim(tm, bundle)
+	shim := newEmbedShim(tm, b)
 	shim.init = init
 	return shim, nil
 }
 
-func reconstructInit(ctx context.Context, bundle *Bundle) (*Init, error) {
-	ioFile := newIospecFile(bundle.Path)
-	iospec, err := ioFile.Read()
+func reconstructInit(ctx context.Context, b *bundle) (*Init, error) {
+	rstdio, err := b.readInitStdio()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read container iospec: %w", err)
+		return nil, err
 	}
 
-	pid, err := newPidFile(bundle.Path).Read()
+	pid, err := newPidFile(b.path).Read()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read container pidfile: %w", err)
 	}
 
 	runtime := NewRunc(
 		"",
-		filepath.Join(bundle.Path, "work"),
-		bundle.Namespace,
+		filepath.Join(b.path, "work"),
+		b.namespace,
 		"", // use default runc
 		"",
 		false, // no systemd cgroup
 	)
 
 	p := NewInit(
-		bundle.ID,
+		b.id,
 		runtime,
 		stdio.Stdio{
-			Stdin:    iospec.Stdin,
-			Stdout:   iospec.Stdout,
-			Stderr:   iospec.Stderr,
-			Terminal: iospec.Terminal,
+			Stdin:    rstdio.Stdin,
+			Stdout:   rstdio.Stdout,
+			Stderr:   rstdio.Stderr,
+			Terminal: rstdio.Terminal,
 		},
 	)
 
 	p.pid = pid
-	p.Bundle = bundle.Path
-	p.Rootfs = filepath.Join(bundle.Path, "rootfs")
-	p.WorkDir = filepath.Join(bundle.Path, "work")
+	p.Bundle = b.path
+	p.Rootfs = filepath.Join(b.path, "rootfs")
+	p.WorkDir = filepath.Join(b.path, "work")
 	return p, nil
 }

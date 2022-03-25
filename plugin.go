@@ -114,13 +114,17 @@ func (tm *TaskManager) Create(ctx context.Context, id string, opts runtime.Creat
 		return nil, err
 	}
 
-	bundle, err := NewBundle(ctx, tm.rootDir, tm.stateDir, id, ns, opts)
+	// TODO(fuweid): apply eventID and options.Options
+	bundle, err := newBundle(tm.rootDir, tm.stateDir, ns, id,
+		withBundleApplyInitOCISpec(opts.Spec),
+		withBundleApplyInitStdio(opts.IO),
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		if retErr != nil {
-			bundle.Delete()
+			bundle.delete()
 		}
 	}()
 

@@ -36,23 +36,23 @@ import (
 type embedShim struct {
 	tm *TaskManager
 
-	bundle *Bundle
-	ropts  *options.Options
-	init   *Init
+	b     *bundle
+	ropts *options.Options
+	init  *Init
 }
 
-func newEmbedShim(tm *TaskManager, bundle *Bundle) *embedShim {
+func newEmbedShim(tm *TaskManager, b *bundle) *embedShim {
 	return &embedShim{
-		tm:     tm,
-		bundle: bundle,
-		ropts:  &options.Options{},
+		tm:    tm,
+		b:     b,
+		ropts: &options.Options{},
 	}
 }
 
 func (es *embedShim) Create(ctx context.Context, opts runtime.CreateOpts) (_ runtime.Task, retErr error) {
 	rootfs := ""
 	if len(opts.Rootfs) > 0 {
-		rootfs = filepath.Join(es.bundle.Path, "rootfs")
+		rootfs = filepath.Join(es.b.path, "rootfs")
 		if err := os.Mkdir(rootfs, 0711); err != nil && !os.IsExist(err) {
 			return nil, err
 		}
@@ -85,7 +85,7 @@ func (es *embedShim) Create(ctx context.Context, opts runtime.CreateOpts) (_ run
 }
 
 func (es *embedShim) ID() string {
-	return es.bundle.ID
+	return es.b.id
 }
 
 func (es *embedShim) PID() uint32 {
@@ -93,7 +93,7 @@ func (es *embedShim) PID() uint32 {
 }
 
 func (es *embedShim) Namespace() string {
-	return es.bundle.Namespace
+	return es.b.namespace
 }
 
 func (es *embedShim) Pause(ctx context.Context) error {
@@ -170,7 +170,7 @@ func (es *embedShim) Stats(ctx context.Context) (*ptypes.Any, error) {
 }
 
 func (es *embedShim) Process(ctx context.Context, id string) (runtime.Process, error) {
-	if es.bundle.ID != id {
+	if es.b.id != id {
 		return nil, fmt.Errorf("exec %s: %w", id, errdefs.ErrNotFound)
 	}
 	if _, err := es.init.Status(ctx); err != nil {
@@ -216,13 +216,13 @@ func (es *embedShim) Delete(ctx context.Context) (*runtime.Exit, error) {
 		return nil, err
 	}
 
-	if err := es.bundle.Delete(); err != nil {
+	if err := es.b.delete(); err != nil {
 		return nil, err
 	}
 
 	// TODO: reconstruct the cleanup-resource
-	tid, _ := es.tm.monitor.idr.getID(es.bundle.Namespace, es.bundle.ID)
-	es.tm.monitor.idr.releaseID(es.bundle.Namespace, es.bundle.ID)
+	tid, _ := es.tm.monitor.idr.getID(es.b.namespace, es.b.id)
+	es.tm.monitor.idr.releaseID(es.b.namespace, es.b.id)
 	es.tm.monitor.store.DelExitedTask(tid)
 	es.tm.Delete(ctx, es.init.id)
 	return &runtime.Exit{
@@ -235,15 +235,15 @@ func (es *embedShim) Delete(ctx context.Context) (*runtime.Exit, error) {
 func (es *embedShim) newInit(ctx context.Context, rootfs string, opts runtime.CreateOpts) (*Init, error) {
 	runtime := NewRunc(
 		"",
-		filepath.Join(es.bundle.Path, "work"),
-		es.bundle.Namespace,
+		filepath.Join(es.b.path, "work"),
+		es.b.namespace,
 		"", // use default runc
 		"",
 		false, // no systemd cgroup
 	)
 
 	p := NewInit(
-		es.bundle.ID,
+		es.b.id,
 		runtime,
 		stdio.Stdio{
 			Stdin:    opts.IO.Stdin,
@@ -253,9 +253,9 @@ func (es *embedShim) newInit(ctx context.Context, rootfs string, opts runtime.Cr
 		},
 	)
 
-	p.Bundle = es.bundle.Path
+	p.Bundle = es.b.path
 	p.Rootfs = rootfs
-	p.WorkDir = filepath.Join(es.bundle.Path, "work")
+	p.WorkDir = filepath.Join(es.b.path, "work")
 	p.IoUID = int(es.ropts.IoUid)
 	p.IoGID = int(es.ropts.IoGid)
 	return p, nil
