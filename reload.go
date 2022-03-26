@@ -6,6 +6,8 @@ import (
 	"io/ioutil"
 	"path/filepath"
 
+	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
+
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/pkg/stdio"
@@ -57,34 +59,34 @@ func (tm *TaskManager) loadTasks(ctx context.Context) error {
 			continue
 		}
 
-		b, err := loadBundle(tm.stateDir, ns, id)
+		b, err := pkgbundle.LoadBundle(tm.stateDir, ns, id)
 		if err != nil {
 			return err
 		}
 
 		// fast path
-		bf, err := ioutil.ReadDir(b.path)
+		bf, err := ioutil.ReadDir(b.Path)
 		if err != nil {
-			b.delete()
-			log.G(ctx).WithError(err).Errorf("fast path read bundle path for %s", b.path)
+			b.Delete()
+			log.G(ctx).WithError(err).Errorf("fast path read bundle path for %s", b.Path)
 			continue
 		}
 
 		if len(bf) == 0 {
-			b.delete()
+			b.Delete()
 			continue
 		}
 
 		if _, err := tm.containers.Get(ctx, id); err != nil {
 			log.G(ctx).WithError(err).Errorf("loading container %s", id)
-			b.delete()
+			b.Delete()
 			continue
 		}
 
 		shim, err := tm.loadEmbedShim(ctx, b)
 		if err != nil {
 			log.G(ctx).WithError(err).Errorf("loading exiting container %s", id)
-			b.delete()
+			b.Delete()
 			continue
 		}
 		tm.tasks.Add(ctx, shim)
@@ -92,7 +94,7 @@ func (tm *TaskManager) loadTasks(ctx context.Context) error {
 	return nil
 }
 
-func (tm *TaskManager) loadEmbedShim(ctx context.Context, b *bundle) (_ *embedShim, retErr error) {
+func (tm *TaskManager) loadEmbedShim(ctx context.Context, b *pkgbundle.Bundle) (_ *embedShim, retErr error) {
 	init, err := reconstructInit(ctx, b)
 	if err != nil {
 		return nil, err
@@ -112,28 +114,28 @@ func (tm *TaskManager) loadEmbedShim(ctx context.Context, b *bundle) (_ *embedSh
 	return shim, nil
 }
 
-func reconstructInit(ctx context.Context, b *bundle) (*Init, error) {
-	rstdio, err := b.readInitStdio()
+func reconstructInit(ctx context.Context, b *pkgbundle.Bundle) (*Init, error) {
+	rstdio, err := readInitStdio(b)
 	if err != nil {
 		return nil, err
 	}
 
-	pid, err := newPidFile(b.path).Read()
+	pid, err := newPidFile(b.Path).Read()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read container pidfile: %w", err)
 	}
 
 	runtime := NewRunc(
 		"",
-		filepath.Join(b.path, "work"),
-		b.namespace,
+		filepath.Join(b.Path, "work"),
+		b.Namespace,
 		"", // use default runc
 		"",
 		false, // no systemd cgroup
 	)
 
 	p := NewInit(
-		b.id,
+		b.ID,
 		runtime,
 		stdio.Stdio{
 			Stdin:    rstdio.Stdin,
@@ -144,8 +146,8 @@ func reconstructInit(ctx context.Context, b *bundle) (*Init, error) {
 	)
 
 	p.pid = pid
-	p.Bundle = b.path
-	p.Rootfs = filepath.Join(b.path, "rootfs")
-	p.WorkDir = filepath.Join(b.path, "work")
+	p.Bundle = b.Path
+	p.Rootfs = filepath.Join(b.Path, "rootfs")
+	p.WorkDir = filepath.Join(b.Path, "work")
 	return p, nil
 }

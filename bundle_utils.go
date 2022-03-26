@@ -7,15 +7,17 @@ import (
 	"os"
 	"path/filepath"
 
+	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
+
 	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	"github.com/gogo/protobuf/types"
 )
 
 var (
-	// bundleFileKeyEventID is the filename about bpf event ID, which
-	// is used to receive the init's exit event from bpf MAP.
-	bundleFileKeyEventID = "event_id.binary"
+	// bundleFileKeyTraceEventID is the filename about bpf trace event ID,
+	// which is used to receive the init's exit event from bpf MAP.
+	bundleFileKeyTraceEventID = "trace_event_id.binary"
 
 	// bundleFileKeyOCISpec is the filename about OCI spec which used by
 	// runC-like command.
@@ -33,48 +35,48 @@ var (
 	bundleFileKeyStio = "stdio.json"
 )
 
-func (b *bundle) readInitEventID() (uint64, error) {
-	pathname := filepath.Join(b.path, bundleFileKeyEventID)
+func readInitTraceEventID(b *pkgbundle.Bundle) (uint64, error) {
+	pathname := filepath.Join(b.Path, bundleFileKeyTraceEventID)
 
 	value, err := os.ReadFile(pathname)
 	if err != nil {
-		return 0, fmt.Errorf("failed to read event ID from %v: %w", b.path, err)
+		return 0, fmt.Errorf("failed to read %v: %w", pathname, err)
 	}
 	return binary.LittleEndian.Uint64(value), nil
 }
 
-// withBundleApplyInitEventID applies the bpf eventID with little-endian binary
-// into bundle.
-func withBundleApplyInitEventID(eventID uint64) bundleApplyOpts {
-	return func(b *bundle) error {
+// withBundleApplyInitTraceEventID applies the bpf eventID with little-endian
+// binary into bundle.
+func withBundleApplyInitEventID(eventID uint64) pkgbundle.ApplyOpts {
+	return func(b *pkgbundle.Bundle) error {
 		var value [8]byte
 		binary.LittleEndian.PutUint64(value[:], eventID)
 
-		pathname := filepath.Join(b.path, bundleFileKeyEventID)
+		pathname := filepath.Join(b.Path, bundleFileKeyTraceEventID)
 		if err := os.WriteFile(pathname, value[:], 0666); err != nil {
-			return fmt.Errorf("failed to store %v in %v: %w", bundleFileKeyEventID, b.path, err)
+			return fmt.Errorf("failed to store in %v: %w", pathname, err)
 		}
 		return nil
 	}
 }
 
 // withBundleApplyInitOCISpec applies the init OCI spec into bundle.
-func withBundleApplyInitOCISpec(spec *types.Any) bundleApplyOpts {
-	return func(b *bundle) error {
-		pathname := filepath.Join(b.path, bundleFileKeyOCISpec)
+func withBundleApplyInitOCISpec(spec *types.Any) pkgbundle.ApplyOpts {
+	return func(b *pkgbundle.Bundle) error {
+		pathname := filepath.Join(b.Path, bundleFileKeyOCISpec)
 		if err := os.WriteFile(pathname, spec.Value, 0666); err != nil {
-			return fmt.Errorf("failed to store %v in %v: %w", bundleFileKeyOCISpec, b.path, err)
+			return fmt.Errorf("failed to store in %v: %w", pathname, err)
 		}
 		return nil
 	}
 }
 
-func (b *bundle) readInitOptions() (*options.Options, error) {
-	pathname := filepath.Join(b.path, bundleFileKeyOptions)
+func readInitOptions(b *pkgbundle.Bundle) (*options.Options, error) {
+	pathname := filepath.Join(b.Path, bundleFileKeyOptions)
 
 	value, err := os.ReadFile(pathname)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read init options from %v: %w", b.path, err)
+		return nil, fmt.Errorf("failed to read %v: %w", pathname, err)
 	}
 
 	opt := &options.Options{}
@@ -85,28 +87,28 @@ func (b *bundle) readInitOptions() (*options.Options, error) {
 }
 
 // withBundleApplyInitOptions applies the init's options into bundle.
-func withBundleApplyInitOptions(opt *options.Options) bundleApplyOpts {
-	return func(b *bundle) error {
+func withBundleApplyInitOptions(opt *options.Options) pkgbundle.ApplyOpts {
+	return func(b *pkgbundle.Bundle) error {
 		value, err := opt.Marshal()
 		if err != nil {
 			return fmt.Errorf("failed to marshal %+v into pb: %w", opt, err)
 		}
 
-		pathname := filepath.Join(b.path, bundleFileKeyOptions)
+		pathname := filepath.Join(b.Path, bundleFileKeyOptions)
 		if err := os.WriteFile(pathname, value, 0666); err != nil {
-			return fmt.Errorf("failed to store %v in %v: %w", bundleFileKeyOptions, b.path, err)
+			return fmt.Errorf("failed to store in %v: %w", pathname, err)
 		}
 		return nil
 	}
 }
 
-func (b *bundle) readInitStdio() (runtime.IO, error) {
+func readInitStdio(b *pkgbundle.Bundle) (runtime.IO, error) {
 	stdio := runtime.IO{}
-	pathname := filepath.Join(b.path, bundleFileKeyStio)
+	pathname := filepath.Join(b.Path, bundleFileKeyStio)
 
 	value, err := os.ReadFile(pathname)
 	if err != nil {
-		return stdio, fmt.Errorf("failed to read init's stdio from %v: %w", b.path, err)
+		return stdio, fmt.Errorf("failed to read %v: %w", pathname, err)
 	}
 
 	if err := json.Unmarshal(value, &stdio); err != nil {
@@ -116,16 +118,16 @@ func (b *bundle) readInitStdio() (runtime.IO, error) {
 }
 
 // withBundleApplyInitStdio applies the init's stdio settings into bundle.
-func withBundleApplyInitStdio(stdio runtime.IO) bundleApplyOpts {
-	return func(b *bundle) error {
+func withBundleApplyInitStdio(stdio runtime.IO) pkgbundle.ApplyOpts {
+	return func(b *pkgbundle.Bundle) error {
 		value, err := json.Marshal(stdio)
 		if err != nil {
 			return fmt.Errorf("failed to marshal %+v into json: %w", stdio, err)
 		}
 
-		pathname := filepath.Join(b.path, bundleFileKeyStio)
+		pathname := filepath.Join(b.Path, bundleFileKeyStio)
 		if err := os.WriteFile(pathname, value, 0666); err != nil {
-			return fmt.Errorf("failed to store %v in %v: %w", bundleFileKeyStio, b.path, err)
+			return fmt.Errorf("failed to store in %v: %w", pathname, err)
 		}
 		return nil
 	}

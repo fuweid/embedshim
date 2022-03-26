@@ -21,6 +21,9 @@ import (
 	"fmt"
 	"os"
 
+	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
+	shimebpf "github.com/fuweid/embedshim/pkg/ebpf"
+
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/events/exchange"
 	"github.com/containerd/containerd/identifiers"
@@ -29,7 +32,6 @@ import (
 	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/plugin"
 	"github.com/containerd/containerd/runtime"
-	shimebpf "github.com/fuweid/embedshim/pkg/ebpf"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
@@ -115,7 +117,7 @@ func (tm *TaskManager) Create(ctx context.Context, id string, opts runtime.Creat
 	}
 
 	// TODO(fuweid): apply eventID and options.Options
-	bundle, err := newBundle(tm.rootDir, tm.stateDir, ns, id,
+	bundle, err := pkgbundle.NewBundle(tm.rootDir, tm.stateDir, ns, id,
 		withBundleApplyInitOCISpec(opts.Spec),
 		withBundleApplyInitStdio(opts.IO),
 	)
@@ -124,7 +126,7 @@ func (tm *TaskManager) Create(ctx context.Context, id string, opts runtime.Creat
 	}
 	defer func() {
 		if retErr != nil {
-			bundle.delete()
+			bundle.Delete()
 		}
 	}()
 

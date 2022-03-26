@@ -1,4 +1,4 @@
-package embedshim
+package bundle
 
 import (
 	"fmt"
@@ -11,37 +11,38 @@ import (
 
 var bundleFileMode fs.FileMode = 0711
 
-// bundle represents an OCI bundle.
-type bundle struct {
-	// id of the bundle
-	id string
-	// path to the bundle
-	path string
-	// namespace of the bundle
-	namespace string
+// Bundle represents an OCI bundle.
+type Bundle struct {
+	// ID of the bundle
+	ID string
+	// Path to the bundle
+	Path string
+	// Namespace of the bundle
+	Namespace string
 }
 
-// loadBundle loads an existing bundle from disk
-func loadBundle(stateDir, ns, id string) (*bundle, error) {
-	return &bundle{
-		id:        id,
-		path:      filepath.Join(stateDir, ns, id),
-		namespace: ns,
+// LoadBundle loads an existing bundle from disk.
+func LoadBundle(stateDir, ns, id string) (*Bundle, error) {
+	return &Bundle{
+		ID:        id,
+		Path:      filepath.Join(stateDir, ns, id),
+		Namespace: ns,
 	}, nil
 }
 
-// bundleApplyOpts is used to store metadata into bundle when newBundle
-type bundleApplyOpts func(*bundle) error
+// ApplyOpts is used to store metadata into bundle when NewBundle.
+type ApplyOpts func(*Bundle) error
 
-func newBundle(root, state, ns, id string, opts ...bundleApplyOpts) (_ *bundle, retErr error) {
+// NewBundle creates bundle.
+func NewBundle(root, state, ns, id string, opts ...ApplyOpts) (_ *Bundle, retErr error) {
 	var (
 		workDir  = filepath.Join(root, ns, id)
 		stateDir = filepath.Join(state, ns, id)
 
-		b = &bundle{
-			id:        id,
-			path:      stateDir,
-			namespace: ns,
+		b = &Bundle{
+			ID:        id,
+			Path:      stateDir,
+			Namespace: ns,
 		}
 
 		paths []string
@@ -56,16 +57,16 @@ func newBundle(root, state, ns, id string, opts ...bundleApplyOpts) (_ *bundle, 
 	}()
 
 	// create state directory for the bundle
-	if err := os.MkdirAll(filepath.Dir(b.path), bundleFileMode); err != nil {
+	if err := os.MkdirAll(filepath.Dir(b.Path), bundleFileMode); err != nil {
 		return nil, err
 	}
 
-	if err := os.Mkdir(b.path, bundleFileMode); err != nil {
+	if err := os.Mkdir(b.Path, bundleFileMode); err != nil {
 		return nil, err
 	}
-	paths = append(paths, b.path)
+	paths = append(paths, b.Path)
 
-	rootfs := filepath.Join(b.path, "rootfs")
+	rootfs := filepath.Join(b.Path, "rootfs")
 	if err := os.MkdirAll(rootfs, bundleFileMode); err != nil {
 		return nil, err
 	}
@@ -95,15 +96,15 @@ func newBundle(root, state, ns, id string, opts ...bundleApplyOpts) (_ *bundle, 
 	paths = append(paths, workDir)
 
 	// symlink workdir
-	if err := os.Symlink(workDir, filepath.Join(b.path, "work")); err != nil {
+	if err := os.Symlink(workDir, filepath.Join(b.Path, "work")); err != nil {
 		return nil, err
 	}
 	return b, nil
 }
 
-// delete a bundle atomically
-func (b *bundle) delete() error {
-	rootfs := filepath.Join(b.path, "rootfs")
+// Delete a bundle atomically
+func (b *Bundle) Delete() error {
+	rootfs := filepath.Join(b.Path, "rootfs")
 
 	if err := mount.UnmountAll(rootfs, 0); err != nil {
 		return fmt.Errorf("unmount rootfs %s: %w", rootfs, err)
@@ -113,8 +114,8 @@ func (b *bundle) delete() error {
 		return fmt.Errorf("failed to remove bundle rootfs: %w", err)
 	}
 
-	workDir, werr := os.Readlink(filepath.Join(b.path, "work"))
-	err := atomicDelete(b.path)
+	workDir, werr := os.Readlink(filepath.Join(b.Path, "work"))
+	err := atomicDelete(b.Path)
 	if err == nil {
 		if werr == nil {
 			return atomicDelete(workDir)
