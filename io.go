@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"reflect"
 	"sync"
 	"syscall"
 
@@ -100,7 +101,7 @@ func (i *pipeIO) Close() error {
 		i.out,
 		i.err,
 	} {
-		if v != nil {
+		if !reflect.ValueOf(v).IsNil() {
 			if cerr := v.Close(); err == nil {
 				err = cerr
 			}
