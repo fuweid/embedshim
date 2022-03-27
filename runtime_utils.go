@@ -114,7 +114,7 @@ func checkRuncInitAlive(init *initProcess) error {
 		pid = init.pid
 
 		execFIFO  = filepath.Join(init.runtime.Root, id, "exec.fifo")
-		procFDDir = filepath.Join("/proc", strconv.Itoa(int(pid)), "fd")
+		procFDDir = filepath.Join("/proc", strconv.Itoa(pid), "fd")
 	)
 
 	fdInfos, err := os.ReadDir(procFDDir)

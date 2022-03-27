@@ -183,7 +183,7 @@ func (tm *TaskManager) Tasks(ctx context.Context, all bool) ([]runtime.Task, err
 	return tm.tasks.GetAll(ctx, all)
 }
 
-func (tm *TaskManager) init() error {
+func (tm *TaskManager) init() (retErr error) {
 	err := shimebpf.EnsurePidMonitorRunning(tm.stateDir)
 	if err != nil {
 		return err
@@ -193,6 +193,11 @@ func (tm *TaskManager) init() error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if retErr != nil {
+			tm.idAlloc.close()
+		}
+	}()
 
 	tm.monitor, err = newMonitor(tm.stateDir)
 	if err != nil {

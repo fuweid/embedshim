@@ -56,7 +56,4 @@ linters-settings:
 run:
   timeout: 8m
   skip-dirs:
-    - api
-    - design
     - docs
-    - docs/man
