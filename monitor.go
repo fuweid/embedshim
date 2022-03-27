@@ -131,7 +131,7 @@ func (m *monitor) subscribe(ns string, cid string, pid uint32, cb callbackFn) (r
 	return nil
 }
 
-func (m *monitor) resubscribe(ctx context.Context, init *Init) (retErr error) {
+func (m *monitor) resubscribe(ctx context.Context, init *initProcess) (retErr error) {
 	ns, err := namespaces.NamespaceRequired(ctx)
 	if err != nil {
 		return err
@@ -243,7 +243,7 @@ func checkRuncInitAlive(ns, cid string, pid uint32) error {
 	return nil
 }
 
-func setExitedStatus(tid uint64, store *shimebpf.SchedProcessExitStore, init *Init) error {
+func setExitedStatus(tid uint64, store *shimebpf.SchedProcessExitStore, init *initProcess) error {
 	exitedStatus, err := store.GetExitedTask(tid)
 	if err != nil {
 		return err

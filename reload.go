@@ -10,7 +10,6 @@ import (
 
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/containerd/pkg/stdio"
 )
 
 func (tm *TaskManager) reloadExistingTasks(ctx context.Context) error {
@@ -114,40 +113,17 @@ func (tm *TaskManager) loadEmbedShim(ctx context.Context, b *pkgbundle.Bundle) (
 	return shim, nil
 }
 
-func reconstructInit(ctx context.Context, b *pkgbundle.Bundle) (*Init, error) {
-	rstdio, err := readInitStdio(b)
+func reconstructInit(ctx context.Context, bundle *pkgbundle.Bundle) (*initProcess, error) {
+	init, err := newInitProcess(bundle)
 	if err != nil {
 		return nil, err
 	}
 
-	pid, err := newPidFile(b.Path).Read()
+	pid, err := newPidFile(bundle).Read()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read container pidfile: %w", err)
 	}
 
-	runtime := NewRunc(
-		"",
-		filepath.Join(b.Path, "work"),
-		b.Namespace,
-		"", // use default runc
-		"",
-		false, // no systemd cgroup
-	)
-
-	p := NewInit(
-		b.ID,
-		runtime,
-		stdio.Stdio{
-			Stdin:    rstdio.Stdin,
-			Stdout:   rstdio.Stdout,
-			Stderr:   rstdio.Stderr,
-			Terminal: rstdio.Terminal,
-		},
-	)
-
-	p.pid = pid
-	p.Bundle = b.Path
-	p.Rootfs = filepath.Join(b.Path, "rootfs")
-	p.WorkDir = filepath.Join(b.Path, "work")
-	return p, nil
+	init.pid = pid
+	return init, nil
 }

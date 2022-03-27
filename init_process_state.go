@@ -39,7 +39,7 @@ type initState interface {
 }
 
 type createdState struct {
-	p *Init
+	p *initProcess
 }
 
 func (s *createdState) transition(name string) error {
@@ -107,7 +107,7 @@ func (s *createdState) Status(ctx context.Context) (string, error) {
 }
 
 type runningState struct {
-	p *Init
+	p *initProcess
 }
 
 func (s *runningState) transition(name string) error {
@@ -123,18 +123,7 @@ func (s *runningState) transition(name string) error {
 }
 
 func (s *runningState) Pause(ctx context.Context) error {
-	s.p.pausing.set(true)
-	// NOTE "pausing" will be returned in the short window
-	// after `transition("paused")`, before `pausing` is reset
-	// to false. That doesn't break the state machine, just
-	// delays the "paused" state a little bit.
-	defer s.p.pausing.set(false)
-
-	if err := s.p.runtime.Pause(ctx, s.p.id); err != nil {
-		return s.p.runtimeError(err, "OCI runtime pause failed")
-	}
-
-	return s.transition("paused")
+	return fmt.Errorf("pause not implemented yet")
 }
 
 func (s *runningState) Resume(ctx context.Context) error {
@@ -178,7 +167,7 @@ func (s *runningState) Status(ctx context.Context) (string, error) {
 }
 
 type pausedState struct {
-	p *Init
+	p *initProcess
 }
 
 func (s *pausedState) transition(name string) error {
@@ -198,11 +187,7 @@ func (s *pausedState) Pause(ctx context.Context) error {
 }
 
 func (s *pausedState) Resume(ctx context.Context) error {
-	if err := s.p.runtime.Resume(ctx, s.p.id); err != nil {
-		return s.p.runtimeError(err, "OCI runtime resume failed")
-	}
-
-	return s.transition("running")
+	return fmt.Errorf("resume not implemented yet")
 }
 
 func (s *pausedState) Update(ctx context.Context, r *google_protobuf.Any) error {
@@ -228,7 +213,7 @@ func (s *pausedState) Kill(ctx context.Context, sig uint32, all bool) error {
 func (s *pausedState) SetExited(status int) {
 	s.p.setExited(status)
 
-	if err := s.p.runtime.Resume(context.Background(), s.p.id); err != nil {
+	if err := s.p.runtime.Resume(context.Background(), s.p.ID()); err != nil {
 		logrus.WithError(err).Error("resuming exited container from paused state")
 	}
 
@@ -246,7 +231,7 @@ func (s *pausedState) Status(ctx context.Context) (string, error) {
 }
 
 type stoppedState struct {
-	p *Init
+	p *initProcess
 }
 
 func (s *stoppedState) transition(name string) error {

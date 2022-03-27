@@ -17,21 +17,11 @@
 package embedshim
 
 import (
-	"context"
-	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
-	"sync"
 	"sync/atomic"
-	"syscall"
-	"time"
 
-	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/go-runc"
 	google_protobuf "github.com/gogo/protobuf/types"
-	"github.com/pkg/errors"
-	"golang.org/x/sys/unix"
 )
 
 // ExecConfig holds exec creation configuration
@@ -59,12 +49,9 @@ type CheckpointConfig struct {
 const (
 	// RuncRoot is the path to the root runc state directory
 	RuncRoot = "/run/containerd/runc"
-	// InitPidFile name of the file that contains the init pid
-	InitPidFile = "init.pid"
 )
 
-// NewRunc returns a new runc instance for a process
-func NewRunc(root, path, namespace, runtime, criu string, systemd bool) *runc.Runc {
+func newRuncRuntime(root, path, namespace, runtime, criu string, systemd bool) *runc.Runc {
 	if root == "" {
 		root = RuncRoot
 	}
@@ -80,8 +67,6 @@ func NewRunc(root, path, namespace, runtime, criu string, systemd bool) *runc.Ru
 		// CRI plugin doesn't call the UnlockOSThread.
 		//
 		// Based on this, we can't use PdeathSignal: SIGKILL here.
-		//
-		// PdeathSignal:  unix.SIGKILL,
 		Root:          filepath.Join(root, namespace),
 		Criu:          criu,
 		SystemdCgroup: systemd,
@@ -100,68 +85,4 @@ func (ab *atomicBool) set(b bool) {
 
 func (ab *atomicBool) get() bool {
 	return atomic.LoadInt32((*int32)(ab)) == 1
-}
-
-type pidFile struct {
-	path string
-}
-
-func (p *pidFile) Path() string {
-	return p.path
-}
-
-func (p *pidFile) Read() (int, error) {
-	return runc.ReadPidFile(p.path)
-}
-
-func newPidFile(bundle string) *pidFile {
-	return &pidFile{
-		path: filepath.Join(bundle, InitPidFile),
-	}
-}
-
-func openRWFifo(ctx context.Context, fn string, perm os.FileMode) (*os.File, error) {
-	if _, err := os.Stat(fn); err != nil {
-		if os.IsNotExist(err) {
-			if err := syscall.Mkfifo(fn, uint32(perm&os.ModePerm)); err != nil && !os.IsExist(err) {
-				return nil, fmt.Errorf("error creating fifo %v: %w", fn, err)
-			}
-		} else {
-			return nil, err
-		}
-	}
-	return os.OpenFile(fn, syscall.O_RDWR, perm)
-}
-
-// waitTimeout handles waiting on a waitgroup with a specified timeout.
-// this is commonly used for waiting on IO to finish after a process has exited
-func waitTimeout(ctx context.Context, wg *sync.WaitGroup, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func checkKillError(err error) error {
-	if err == nil {
-		return nil
-	}
-	if strings.Contains(err.Error(), "os: process already finished") ||
-		strings.Contains(err.Error(), "container not running") ||
-		strings.Contains(strings.ToLower(err.Error()), "no such process") ||
-		err == unix.ESRCH {
-		return errors.Wrapf(errdefs.ErrNotFound, "process already finished")
-	} else if strings.Contains(err.Error(), "does not exist") {
-		return errors.Wrapf(errdefs.ErrNotFound, "no such container")
-	}
-	return errors.Wrapf(err, "unknown error after kill")
 }

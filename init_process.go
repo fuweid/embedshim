@@ -22,99 +22,119 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
+
 	"github.com/containerd/console"
+	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/pkg/stdio"
+	"github.com/containerd/containerd/runtime/v2/runc/options"
 	"github.com/containerd/fifo"
 	"github.com/containerd/go-runc"
 	google_protobuf "github.com/gogo/protobuf/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
 )
 
-// Init represents an initial process for a container
-type Init struct {
-	wg        sync.WaitGroup
+type initProcess struct {
 	initState initState
+	bundle    *pkgbundle.Bundle
 
-	// mu is used to ensure that `Start()` and `Exited()` calls return in
-	// the right order when invoked in separate go routines.
-	// This is the case within the shim implementation as it makes use of
-	// the reaper interface.
-	mu sync.Mutex
+	runtime *runc.Runc
+	options *options.Options
+
+	wg sync.WaitGroup
 
 	waitBlock chan struct{}
 
-	WorkDir string
-
-	id       string
-	Bundle   string
+	stdio    stdio.Stdio
 	console  console.Console
-	Platform stdio.Platform
+	platform stdio.Platform // TODO: as shim level instead of initProcess
 	io       *processIO
-	runtime  *runc.Runc
-	// pausing preserves the pausing state.
-	pausing *atomicBool
-	status  int
-	exited  time.Time
-	pid     int
-	closers []io.Closer
-	stdin   io.Closer
-	stdio   stdio.Stdio
-	Rootfs  string
+	stdin    io.Closer
+	closers  []io.Closer
 
-	IoUID        int
-	IoGID        int
-	NoPivotRoot  bool
-	NoNewKeyring bool
-	CriuWorkPath string
+	mu     sync.Mutex
+	status int
+	exited time.Time
+	pid    int
 }
 
-// NewInit returns a new process
-func NewInit(id string, runtime *runc.Runc, stdio stdio.Stdio) *Init {
-	p := &Init{
-		id:        id,
-		runtime:   runtime,
-		pausing:   new(atomicBool),
-		stdio:     stdio,
+func newInitProcess(bundle *pkgbundle.Bundle) (*initProcess, error) {
+	opts, err := readInitOptions(bundle)
+	if err != nil {
+		return nil, err
+	}
+
+	initIO, err := readInitStdio(bundle)
+	if err != nil {
+		return nil, err
+	}
+
+	runtime := newRuncRuntime(
+		opts.Root,                          // for working dir
+		filepath.Join(bundle.Path, "work"), // for log.json
+		bundle.Namespace,                   // for isolation
+		opts.BinaryName,                    // other implementation, like crun, youki
+		"",
+		opts.SystemdCgroup, // use systemd's cgroup
+	)
+
+	p := &initProcess{
+		bundle:  bundle,
+		options: opts,
+		runtime: runtime,
+		stdio: stdio.Stdio{
+			Stdin:    initIO.Stdin,
+			Stdout:   initIO.Stdout,
+			Stderr:   initIO.Stderr,
+			Terminal: initIO.Terminal,
+		},
 		status:    0,
 		waitBlock: make(chan struct{}),
 	}
 	p.initState = &createdState{p: p}
-	return p
+	return p, nil
 }
 
-// Create the process with the provided config
-func (p *Init) Create(ctx context.Context) (retErr error) {
+func (p *initProcess) Create(ctx context.Context) (retErr error) {
 	var (
 		err     error
 		socket  *runc.Socket
 		pio     *processIO
-		pidFile = newPidFile(p.Bundle)
+		pidFile = newPidFile(p.bundle)
+
+		ioUID = int(p.options.IoUid)
+		ioGID = int(p.options.IoGid)
 	)
 
-	// NOTE(fuweid):
+	// TODO(fuweid):
 	//
-	// Terminal mode can't be reload.
+	// Terminal console poller should be shared in plugin Level.
 	if p.stdio.Terminal {
-		// TODO: rollback
-		p.Platform, err = NewPlatform()
+		p.platform, err = NewPlatform()
 		if err != nil {
 			return nil
 		}
+
+		defer func() {
+			if retErr != nil {
+				p.platform.Close()
+			}
+		}()
 
 		if socket, err = runc.NewTempConsoleSocket(); err != nil {
 			return fmt.Errorf("failed to create OCI runtime console socket: %w", err)
 		}
 		defer socket.Close()
 	} else {
-		if pio, err = createIO(ctx, p.id, p.IoUID, p.IoGID, p.stdio); err != nil {
+		if pio, err = createIO(ctx, p.ID(), ioUID, ioGID, p.stdio); err != nil {
 			return fmt.Errorf("failed to create init process I/O: %w", err)
 		}
 		p.io = pio
@@ -122,8 +142,8 @@ func (p *Init) Create(ctx context.Context) (retErr error) {
 
 	opts := &runc.CreateOpts{
 		PidFile:      pidFile.Path(),
-		NoPivot:      p.NoPivotRoot,
-		NoNewKeyring: p.NoNewKeyring,
+		NoPivot:      p.options.NoPivotRoot,
+		NoNewKeyring: p.options.NoNewKeyring,
 	}
 	if p.io != nil {
 		opts.IO = p.io.IO()
@@ -131,9 +151,11 @@ func (p *Init) Create(ctx context.Context) (retErr error) {
 	if socket != nil {
 		opts.ConsoleSocket = socket
 	}
-	if err := p.runtime.Create(ctx, p.id, p.Bundle, opts); err != nil {
+
+	if err := p.runtime.Create(ctx, p.ID(), p.bundle.Path, opts); err != nil {
 		return p.runtimeError(err, "OCI runtime create failed")
 	}
+
 	if p.stdio.Stdin != "" {
 		if err := p.openStdin(p.stdio.Stdin); err != nil {
 			return err
@@ -147,13 +169,31 @@ func (p *Init) Create(ctx context.Context) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("failed to retrieve console master: %w", err)
 		}
-		console, err = p.Platform.CopyConsole(ctx, console, p.id, p.stdio.Stdin, p.stdio.Stdout, p.stdio.Stderr, &p.wg)
+
+		console, err = p.platform.CopyConsole(ctx, console, p.ID(), p.stdio.Stdin, p.stdio.Stdout, p.stdio.Stderr, &p.wg)
 		if err != nil {
 			return fmt.Errorf("failed to start console copy: %w", err)
 		}
 		p.console = console
 	} else {
-		if err := pio.Copy(); err != nil {
+		// NOTE: There is no stdout/stderr copy because we open Read-Write
+		// fifo as init process's stdout/stderr. Unlike the shim server's
+		// pipe, the containerd restarts without closing the init process
+		// stdout/stderr so that it is easy to recover.
+		//
+		// But the stdin still needs pipe as relay because we need to
+		// notify the init process that the stdin has been closed, like
+		//
+		// 	echo "hello, world" | cat
+		//
+		// So, for the init process which needs stdin, we can't recover
+		// the stdin after containerd restart, A.K.A we can't re-attach
+		// to stdin.
+		//
+		// This embedshim plugin can't cover 100% cases from shim server,
+		// but in producation, most of workloads are headless. The stdin
+		// is used to debug or exec operations job. I think it is acceptable :P.
+		if err := pio.CopyStdin(); err != nil {
 			return fmt.Errorf("failed to start io pipe copy: %w", err)
 		}
 	}
@@ -166,7 +206,7 @@ func (p *Init) Create(ctx context.Context) (retErr error) {
 	return nil
 }
 
-func (p *Init) openStdin(path string) error {
+func (p *initProcess) openStdin(path string) error {
 	sc, err := fifo.OpenFifo(context.Background(), path, unix.O_WRONLY|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return fmt.Errorf("failed to open stdin fifo %s: %w", path, err)
@@ -178,22 +218,22 @@ func (p *Init) openStdin(path string) error {
 }
 
 // Wait for the process to exit
-func (p *Init) Wait() {
+func (p *initProcess) Wait() {
 	<-p.waitBlock
 }
 
 // ID of the process
-func (p *Init) ID() string {
-	return p.id
+func (p *initProcess) ID() string {
+	return p.bundle.ID
 }
 
 // Pid of the process
-func (p *Init) Pid() int {
+func (p *initProcess) Pid() int {
 	return p.pid
 }
 
-// ExitStatus of the process
-func (p *Init) ExitStatus() int {
+// exitStatus of the process
+func (p *initProcess) ExitStatus() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -201,7 +241,7 @@ func (p *Init) ExitStatus() int {
 }
 
 // ExitedAt at time when the process exited
-func (p *Init) ExitedAt() time.Time {
+func (p *initProcess) ExitedAt() time.Time {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -209,11 +249,7 @@ func (p *Init) ExitedAt() time.Time {
 }
 
 // Status of the process
-func (p *Init) Status(ctx context.Context) (string, error) {
-	if p.pausing.get() {
-		return "pausing", nil
-	}
-
+func (p *initProcess) Status(ctx context.Context) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -221,46 +257,49 @@ func (p *Init) Status(ctx context.Context) (string, error) {
 }
 
 // Start the init process
-func (p *Init) Start(ctx context.Context) error {
+func (p *initProcess) Start(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	return p.initState.Start(ctx)
 }
 
-func (p *Init) start(ctx context.Context) error {
-	err := p.runtime.Start(ctx, p.id)
+func (p *initProcess) start(ctx context.Context) error {
+	err := p.runtime.Start(ctx, p.ID())
 	return p.runtimeError(err, "OCI runtime start failed")
 }
 
 // SetExited of the init process with the next status
-func (p *Init) SetExited(status int) {
+func (p *initProcess) SetExited(status int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	p.initState.SetExited(status)
 }
 
-func (p *Init) setExited(status int) {
+func (p *initProcess) setExited(status int) {
 	p.exited = time.Now()
 	p.status = status
-	if p.Platform != nil {
-		p.Platform.ShutdownConsole(context.Background(), p.console)
+	if p.platform != nil {
+		p.platform.ShutdownConsole(context.Background(), p.console)
+
+		p.platform.Close()
+		p.platform = nil
 	}
 	close(p.waitBlock)
 }
 
 // Delete the init process
-func (p *Init) Delete(ctx context.Context) error {
+func (p *initProcess) Delete(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	return p.initState.Delete(ctx)
 }
 
-func (p *Init) delete(ctx context.Context) error {
+func (p *initProcess) delete(ctx context.Context) error {
 	waitTimeout(ctx, &p.wg, 2*time.Second)
-	err := p.runtime.Delete(ctx, p.id, nil)
+	err := p.runtime.Delete(ctx, p.ID(), nil)
 	// ignore errors if a runtime has already deleted the process
 	// but we still hold metadata and pipes
 	//
@@ -279,17 +318,19 @@ func (p *Init) delete(ctx context.Context) error {
 		}
 		p.io.Close()
 	}
-	if err2 := mount.UnmountAll(p.Rootfs, 0); err2 != nil {
+
+	rootfs := filepath.Join(p.bundle.Path, "rootfs")
+	if err2 := mount.UnmountAll(rootfs, 0); err2 != nil {
 		log.G(ctx).WithError(err2).Warn("failed to cleanup rootfs mount")
 		if err == nil {
-			err = errors.Wrap(err2, "failed rootfs umount")
+			err = fmt.Errorf("failed rootfs umount: %w", err)
 		}
 	}
 	return err
 }
 
 // Resize the init processes console
-func (p *Init) Resize(ws console.WinSize) error {
+func (p *initProcess) Resize(ws console.WinSize) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -300,7 +341,7 @@ func (p *Init) Resize(ws console.WinSize) error {
 }
 
 // Pause the init process and all its child processes
-func (p *Init) Pause(ctx context.Context) error {
+func (p *initProcess) Pause(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -308,7 +349,7 @@ func (p *Init) Pause(ctx context.Context) error {
 }
 
 // Resume the init process and all its child processes
-func (p *Init) Resume(ctx context.Context) error {
+func (p *initProcess) Resume(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -316,73 +357,73 @@ func (p *Init) Resume(ctx context.Context) error {
 }
 
 // Kill the init process
-func (p *Init) Kill(ctx context.Context, signal uint32, all bool) error {
+func (p *initProcess) Kill(ctx context.Context, signal uint32, all bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	return p.initState.Kill(ctx, signal, all)
 }
 
-func (p *Init) kill(ctx context.Context, signal uint32, all bool) error {
-	err := p.runtime.Kill(ctx, p.id, int(signal), &runc.KillOpts{
+func (p *initProcess) kill(ctx context.Context, signal uint32, all bool) error {
+	err := p.runtime.Kill(ctx, p.ID(), int(signal), &runc.KillOpts{
 		All: all,
 	})
 	return checkKillError(err)
 }
 
 // KillAll processes belonging to the init process
-func (p *Init) KillAll(ctx context.Context) error {
+func (p *initProcess) KillAll(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	err := p.runtime.Kill(ctx, p.id, int(unix.SIGKILL), &runc.KillOpts{
+	err := p.runtime.Kill(ctx, p.ID(), int(unix.SIGKILL), &runc.KillOpts{
 		All: true,
 	})
 	return p.runtimeError(err, "OCI runtime killall failed")
 }
 
 // Stdin of the process
-func (p *Init) Stdin() io.Closer {
+func (p *initProcess) Stdin() io.Closer {
 	return p.stdin
 }
 
 // Runtime returns the OCI runtime configured for the init process
-func (p *Init) Runtime() *runc.Runc {
+func (p *initProcess) Runtime() *runc.Runc {
 	return p.runtime
 }
 
 // Exec returns a new child process
-func (p *Init) Exec(ctx context.Context, path string, r *ExecConfig) (Process, error) {
+func (p *initProcess) Exec(ctx context.Context, path string, r *ExecConfig) (Process, error) {
 	return nil, fmt.Errorf("exec not implemented yet")
 }
 
 // Checkpoint the init process
-func (p *Init) Checkpoint(ctx context.Context, r *CheckpointConfig) error {
+func (p *initProcess) Checkpoint(ctx context.Context, r *CheckpointConfig) error {
 	return fmt.Errorf("checkpoint not implemented yet")
 }
 
 // Update the processes resource configuration
-func (p *Init) Update(ctx context.Context, r *google_protobuf.Any) error {
+func (p *initProcess) Update(ctx context.Context, r *google_protobuf.Any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	return p.initState.Update(ctx, r)
 }
 
-func (p *Init) update(ctx context.Context, r *google_protobuf.Any) error {
+func (p *initProcess) update(ctx context.Context, r *google_protobuf.Any) error {
 	var resources specs.LinuxResources
 	if err := json.Unmarshal(r.Value, &resources); err != nil {
 		return err
 	}
-	return p.runtime.Update(ctx, p.id, &resources)
+	return p.runtime.Update(ctx, p.ID(), &resources)
 }
 
 // Stdio of the process
-func (p *Init) Stdio() stdio.Stdio {
+func (p *initProcess) Stdio() stdio.Stdio {
 	return p.stdio
 }
 
-func (p *Init) runtimeError(rErr error, msg string) error {
+func (p *initProcess) runtimeError(rErr error, msg string) error {
 	if rErr == nil {
 		return nil
 	}
@@ -390,23 +431,14 @@ func (p *Init) runtimeError(rErr error, msg string) error {
 	rMsg, err := getLastRuntimeError(p.runtime)
 	switch {
 	case err != nil:
-		return errors.Wrapf(rErr, "%s: %s (%s)", msg, "unable to retrieve OCI runtime error", err.Error())
+		return fmt.Errorf("%s: %s (%s)", msg, "unable to retrieve OCI runtime error", err.Error())
 	case rMsg == "":
-		return errors.Wrap(rErr, msg)
+		return rErr
 	default:
-		return errors.Errorf("%s: %s", msg, rMsg)
+		return fmt.Errorf("%s: %s", msg, rMsg)
 	}
 }
 
-func withConditionalIO(c stdio.Stdio) runc.IOOpt {
-	return func(o *runc.IOOption) {
-		o.OpenStdin = c.Stdin != ""
-		o.OpenStdout = c.Stdout != ""
-		o.OpenStderr = c.Stderr != ""
-	}
-}
-
-// TODO(mlaventure): move to runc package?
 func getLastRuntimeError(r *runc.Runc) (string, error) {
 	if r.Log == "" {
 		return "", nil
@@ -438,4 +470,37 @@ func getLastRuntimeError(r *runc.Runc) (string, error) {
 	}
 
 	return errMsg, nil
+}
+
+// waitTimeout handles waiting on a waitgroup with a specified timeout.
+// this is commonly used for waiting on IO to finish after a process has exited
+func waitTimeout(ctx context.Context, wg *sync.WaitGroup, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func checkKillError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(err.Error(), "os: process already finished") ||
+		strings.Contains(err.Error(), "container not running") ||
+		strings.Contains(strings.ToLower(err.Error()), "no such process") ||
+		err == unix.ESRCH {
+		return fmt.Errorf("process already finished: %w", errdefs.ErrNotFound)
+	} else if strings.Contains(err.Error(), "does not exist") {
+		return fmt.Errorf("no such container: %w", errdefs.ErrNotFound)
+	}
+	return fmt.Errorf("unknown error after kill: %w", err)
 }

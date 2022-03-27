@@ -11,6 +11,7 @@ import (
 
 	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
+	"github.com/containerd/go-runc"
 	"github.com/gogo/protobuf/types"
 )
 
@@ -33,7 +34,28 @@ var (
 	// NOTE: For the init task running with stdin or terminal, the plugin
 	// might kill-9 init when recover.
 	bundleFileKeyStio = "stdio.json"
+
+	// bundleInitPidFile name of the file that contains the init pid
+	bundleInitPidFile = "init.pid"
 )
+
+func newPidFile(bundle *pkgbundle.Bundle) *pidFile {
+	return &pidFile{
+		path: filepath.Join(bundle.Path, bundleInitPidFile),
+	}
+}
+
+type pidFile struct {
+	path string
+}
+
+func (p *pidFile) Path() string {
+	return p.path
+}
+
+func (p *pidFile) Read() (int, error) {
+	return runc.ReadPidFile(p.path)
+}
 
 func readInitTraceEventID(b *pkgbundle.Bundle) (uint64, error) {
 	pathname := filepath.Join(b.Path, bundleFileKeyTraceEventID)

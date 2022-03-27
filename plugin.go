@@ -32,6 +32,8 @@ import (
 	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/plugin"
 	"github.com/containerd/containerd/runtime"
+	"github.com/containerd/containerd/runtime/v2/runc/options"
+	"github.com/containerd/typeurl"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
@@ -116,9 +118,27 @@ func (tm *TaskManager) Create(ctx context.Context, id string, opts runtime.Creat
 		return nil, err
 	}
 
+	topts := opts.RuntimeOptions
+	if topts == nil {
+		topts = opts.TaskOptions
+	}
+
+	initOpts := &options.Options{}
+	if topts != nil && topts.GetTypeUrl() != "" {
+		v, err := typeurl.UnmarshalAny(topts)
+		if err != nil {
+			return nil, err
+		}
+
+		if toptions, ok := v.(*options.Options); ok {
+			initOpts = toptions
+		}
+	}
+
 	// TODO(fuweid): apply eventID and options.Options
 	bundle, err := pkgbundle.NewBundle(tm.rootDir, tm.stateDir, ns, id,
 		withBundleApplyInitOCISpec(opts.Spec),
+		withBundleApplyInitOptions(initOpts),
 		withBundleApplyInitStdio(opts.IO),
 	)
 	if err != nil {

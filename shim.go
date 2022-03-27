@@ -27,7 +27,6 @@ import (
 	"github.com/containerd/console"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/mount"
-	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	ptypes "github.com/gogo/protobuf/types"
@@ -40,7 +39,7 @@ type embedShim struct {
 
 	b     *pkgbundle.Bundle
 	ropts *options.Options
-	init  *Init
+	init  *initProcess
 }
 
 func newEmbedShim(tm *TaskManager, b *pkgbundle.Bundle) *embedShim {
@@ -74,7 +73,7 @@ func (es *embedShim) Create(ctx context.Context, opts runtime.CreateOpts) (_ run
 		}
 	}
 
-	p, err := es.newInit(ctx, rootfs, opts)
+	p, err := es.newInit()
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +225,7 @@ func (es *embedShim) Delete(ctx context.Context) (*runtime.Exit, error) {
 	tid, _ := es.tm.monitor.idr.getID(es.b.Namespace, es.b.ID)
 	es.tm.monitor.idr.releaseID(es.b.Namespace, es.b.ID)
 	es.tm.monitor.store.DelExitedTask(tid)
-	es.tm.Delete(ctx, es.init.id)
+	es.tm.Delete(ctx, es.init.ID())
 	return &runtime.Exit{
 		Pid:       uint32(es.init.pid),
 		Status:    uint32(es.init.ExitStatus()),
@@ -234,31 +233,6 @@ func (es *embedShim) Delete(ctx context.Context) (*runtime.Exit, error) {
 	}, nil
 }
 
-func (es *embedShim) newInit(ctx context.Context, rootfs string, opts runtime.CreateOpts) (*Init, error) {
-	runtime := NewRunc(
-		"",
-		filepath.Join(es.b.Path, "work"),
-		es.b.Namespace,
-		"", // use default runc
-		"",
-		false, // no systemd cgroup
-	)
-
-	p := NewInit(
-		es.b.ID,
-		runtime,
-		stdio.Stdio{
-			Stdin:    opts.IO.Stdin,
-			Stdout:   opts.IO.Stdout,
-			Stderr:   opts.IO.Stderr,
-			Terminal: opts.IO.Terminal,
-		},
-	)
-
-	p.Bundle = es.b.Path
-	p.Rootfs = rootfs
-	p.WorkDir = filepath.Join(es.b.Path, "work")
-	p.IoUID = int(es.ropts.IoUid)
-	p.IoGID = int(es.ropts.IoGid)
-	return p, nil
+func (es *embedShim) newInit() (*initProcess, error) {
+	return newInitProcess(es.b)
 }
