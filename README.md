@@ -19,11 +19,53 @@ low overhead.
 
 ![embedshim-overview](docs/images/embedshim-overview.svg)
 
-## Demos(TODO)
+## Build/Install
 
-## TODO-List
+The embedshim needs to compile bpf with clang/llvm. So install clang/llvm as first.
 
-* [ ] Handle Stdin/Terminal
-* [ ] Support Exec/Pause/Resume
+```bash
+$ echo "deb http://apt.llvm.org/focal/ llvm-toolchain-focal main" | sudo tee -a /etc/apt/sources.lis
+$ wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+$ sudo apt-get update -y
+$ sudo apt-get install -y g++ libelf-dev clang lld llvm
+```
+
+And then pull the repo and build it.
+
+```bash
+$ git clone https://github.com/fuweid/embedshim.git
+$ cd embedshim
+$ git submodule update --init --recursive
+$ make
+```
+
+The binary is named by `embedshim-containerd` which has full functionality in
+linux. You can just replace your local containerd with it.
+
+```bash
+$ sudo install bin/embedshim-containerd $(command -v containerd)
+$ sudo systemctl restart containerd
+```
+
+And check plugin with `ctr`
+
+```bash
+$ ctr plugin ls | grep embed
+io.containerd.runtime.v1        embed                    linux/amd64    ok
+```
+
+## Status
+
+The embedshim supports to run container in headless or with input.
+But it still works in progress, do not use in production.
+
+* [ ] Support Exec
+* [ ] Support Pause/Resume
 * [ ] Metrics Support
-* [ ] Event support
+* [ ] Task Event(Create/Start/Exit/Delete/OOM) support
+
+## Requirements
+
+* raw tracepoint bpf >= kernel v4.18 
+* CO-RE BTF vmlinux support >= kernel v5.4
+* pidfd polling >= kernel v5.3
