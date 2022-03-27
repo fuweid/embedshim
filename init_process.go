@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -30,7 +29,6 @@ import (
 	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
 
 	"github.com/containerd/console"
-	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/pkg/stdio"
@@ -439,39 +437,6 @@ func (p *initProcess) runtimeError(rErr error, msg string) error {
 	}
 }
 
-func getLastRuntimeError(r *runc.Runc) (string, error) {
-	if r.Log == "" {
-		return "", nil
-	}
-
-	f, err := os.OpenFile(r.Log, os.O_RDONLY, 0400)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	var (
-		errMsg string
-		log    struct {
-			Level string
-			Msg   string
-			Time  time.Time
-		}
-	)
-
-	dec := json.NewDecoder(f)
-	for err = nil; err == nil; {
-		if err = dec.Decode(&log); err != nil && err != io.EOF {
-			return "", err
-		}
-		if log.Level == "error" {
-			errMsg = strings.TrimSpace(log.Msg)
-		}
-	}
-
-	return errMsg, nil
-}
-
 // waitTimeout handles waiting on a waitgroup with a specified timeout.
 // this is commonly used for waiting on IO to finish after a process has exited
 func waitTimeout(ctx context.Context, wg *sync.WaitGroup, timeout time.Duration) error {
@@ -488,19 +453,4 @@ func waitTimeout(ctx context.Context, wg *sync.WaitGroup, timeout time.Duration)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-func checkKillError(err error) error {
-	if err == nil {
-		return nil
-	}
-	if strings.Contains(err.Error(), "os: process already finished") ||
-		strings.Contains(err.Error(), "container not running") ||
-		strings.Contains(strings.ToLower(err.Error()), "no such process") ||
-		err == unix.ESRCH {
-		return fmt.Errorf("process already finished: %w", errdefs.ErrNotFound)
-	} else if strings.Contains(err.Error(), "does not exist") {
-		return fmt.Errorf("no such container: %w", errdefs.ErrNotFound)
-	}
-	return fmt.Errorf("unknown error after kill: %w", err)
 }
