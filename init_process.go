@@ -324,7 +324,7 @@ func (p *initProcess) delete(ctx context.Context) error {
 		p.io.Close()
 	}
 
-	rootfs := filepath.Join(p.bundle.Path, "rootfs")
+	rootfs := p.bundle.Rootfs()
 	if err2 := mount.UnmountAll(rootfs, 0); err2 != nil {
 		log.G(ctx).WithError(err2).Warn("failed to cleanup rootfs mount")
 		if err == nil {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
-	"os"
 	"path/filepath"
 
 	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
@@ -13,8 +12,8 @@ import (
 	"github.com/containerd/containerd/namespaces"
 )
 
-func (tm *TaskManager) reloadExistingTasks(ctx context.Context) error {
-	nsDirs, err := ioutil.ReadDir(tm.stateDir)
+func (manager *TaskManager) reloadExistingTasks(ctx context.Context) error {
+	nsDirs, err := ioutil.ReadDir(manager.stateDir)
 	if err != nil {
 		return err
 	}
@@ -30,7 +29,7 @@ func (tm *TaskManager) reloadExistingTasks(ctx context.Context) error {
 		}
 
 		log.G(ctx).WithField("namespace", ns).Info("loading tasks in namespace")
-		if err := tm.loadTasks(namespaces.WithNamespace(ctx, ns)); err != nil {
+		if err := manager.loadTasks(namespaces.WithNamespace(ctx, ns)); err != nil {
 			log.G(ctx).WithField("namespace", ns).WithError(err).Error("loading tasks in namespace")
 			continue
 		}
@@ -38,13 +37,13 @@ func (tm *TaskManager) reloadExistingTasks(ctx context.Context) error {
 	return nil
 }
 
-func (tm *TaskManager) loadTasks(ctx context.Context) error {
+func (manager *TaskManager) loadTasks(ctx context.Context) error {
 	ns, err := namespaces.NamespaceRequired(ctx)
 	if err != nil {
 		return err
 	}
 
-	shimDirs, err := ioutil.ReadDir(filepath.Join(tm.stateDir, ns))
+	shimDirs, err := ioutil.ReadDir(filepath.Join(manager.stateDir, ns))
 	if err != nil {
 		return err
 	}
@@ -59,63 +58,67 @@ func (tm *TaskManager) loadTasks(ctx context.Context) error {
 			continue
 		}
 
-		b, err := pkgbundle.LoadBundle(tm.stateDir, ns, id)
+		bundle, err := pkgbundle.LoadBundle(manager.stateDir, ns, id)
 		if err != nil {
 			return err
 		}
 
 		// fast path
-		bf, err := os.ReadDir(b.Path)
+		if err := bundle.IsValid(); err != nil {
+			log.G(ctx).WithError(err).Errorf("bundle %s is invalid, cleanup", bundle.Path)
+			bundle.Delete()
+			continue
+		}
+
+		shim, err := manager.loadShim(ctx, bundle)
 		if err != nil {
-			b.Delete()
-			log.G(ctx).WithError(err).Errorf("fast path read bundle path for %s", b.Path)
+			log.G(ctx).WithError(err).Errorf("failed to load exiting task %s", id)
+			bundle.Delete()
 			continue
 		}
 
-		if len(bf) == 0 {
-			b.Delete()
+		if _, err := manager.containers.Get(ctx, id); err != nil {
+			log.G(ctx).WithError(err).Errorf("failed to load container %s and start to delete task", id)
+			shim.Delete(ctx)
 			continue
 		}
-
-		if _, err := tm.containers.Get(ctx, id); err != nil {
-			log.G(ctx).WithError(err).Errorf("loading container %s", id)
-			b.Delete()
-			continue
-		}
-
-		shim, err := tm.loadEmbedShim(ctx, b)
-		if err != nil {
-			log.G(ctx).WithError(err).Errorf("loading exiting container %s", id)
-			b.Delete()
-			continue
-		}
-		tm.tasks.Add(ctx, shim)
+		manager.tasks.Add(ctx, shim)
 	}
 	return nil
 }
 
-func (tm *TaskManager) loadEmbedShim(ctx context.Context, b *pkgbundle.Bundle) (_ *embedShim, retErr error) {
-	init, err := reconstructInit(ctx, b)
+func (manager *TaskManager) loadShim(ctx context.Context, bundle *pkgbundle.Bundle) (_ *shim, retErr error) {
+	init, err := renewInitProcess(bundle)
 	if err != nil {
 		return nil, err
 	}
+
 	defer func() {
 		if retErr != nil {
-			init.Delete(ctx)
-			tm.monitor.store.DelExitedTask(init.traceEventID)
+			deferCtx, deferCancel := deferContext()
+			defer deferCancel()
+
+			init.Delete(deferCtx)
+
+			manager.cleanInitProcessTraceEvent(init)
 		}
 	}()
 
-	if err := tm.monitor.repollingInitProcess(init); err != nil {
+	if err := manager.repollingInitProcess(init); err != nil {
 		return nil, err
 	}
-
-	shim := newEmbedShim(tm, b)
-	shim.init = init
-	return shim, nil
+	return renewShim(manager, init), nil
 }
 
-func reconstructInit(ctx context.Context, bundle *pkgbundle.Bundle) (*initProcess, error) {
+func renewShim(manager *TaskManager, init *initProcess) *shim {
+	return &shim{
+		manager: manager,
+		bundle:  init.bundle,
+		init:    init,
+	}
+}
+
+func renewInitProcess(bundle *pkgbundle.Bundle) (*initProcess, error) {
 	init, err := newInitProcess(bundle)
 	if err != nil {
 		return nil, err

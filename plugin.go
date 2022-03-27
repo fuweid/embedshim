@@ -1,19 +1,3 @@
-/*
-   Copyright The containerd Authors.
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
-*/
-
 package embedshim
 
 import (
@@ -107,11 +91,11 @@ type TaskManager struct {
 	monitor *monitor
 }
 
-func (tm *TaskManager) ID() string {
+func (*TaskManager) ID() string {
 	return pluginID
 }
 
-func (tm *TaskManager) Create(ctx context.Context, id string, opts runtime.CreateOpts) (_ runtime.Task, retErr error) {
+func (manager *TaskManager) Create(ctx context.Context, id string, opts runtime.CreateOpts) (_ runtime.Task, retErr error) {
 	if err := identifiers.Validate(id); err != nil {
 		return nil, errors.Wrapf(err, "invalid task id %s", id)
 	}
@@ -121,29 +105,18 @@ func (tm *TaskManager) Create(ctx context.Context, id string, opts runtime.Creat
 		return nil, err
 	}
 
-	topts := opts.RuntimeOptions
-	if topts == nil {
-		topts = opts.TaskOptions
-	}
-
-	initOpts := &options.Options{}
-	if topts != nil && topts.GetTypeUrl() != "" {
-		v, err := typeurl.UnmarshalAny(topts)
-		if err != nil {
-			return nil, err
-		}
-
-		if toptions, ok := v.(*options.Options); ok {
-			initOpts = toptions
-		}
-	}
-
-	traceEventID, err := tm.idAlloc.nextID()
+	traceEventID, err := manager.nextTraceEventID()
 	if err != nil {
 		return nil, err
 	}
 
-	bundle, err := pkgbundle.NewBundle(tm.rootDir, tm.stateDir, ns, id,
+	initOpts, err := initOptionsFromCreateOpts(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	bundle, err := pkgbundle.NewBundle(manager.rootDir, manager.stateDir,
+		ns, id,
 		withBundleApplyInitOCISpec(opts.Spec),
 		withBundleApplyInitOptions(initOpts),
 		withBundleApplyInitStdio(opts.IO),
@@ -158,50 +131,91 @@ func (tm *TaskManager) Create(ctx context.Context, id string, opts runtime.Creat
 		}
 	}()
 
-	es := newEmbedShim(tm, bundle)
-	t, err := es.Create(ctx, opts)
+	s, err := newShim(manager, bundle)
+	if err != nil {
+		return nil, err
+	}
+
+	task, err := s.Create(ctx, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create init process: %w", err)
 	}
-	tm.tasks.Add(ctx, t)
-	return t, nil
+
+	manager.tasks.Add(ctx, task)
+	return task, nil
 }
 
-func (tm *TaskManager) Get(ctx context.Context, id string) (runtime.Task, error) {
-	return tm.tasks.Get(ctx, id)
+func (manager *TaskManager) Get(ctx context.Context, id string) (runtime.Task, error) {
+	return manager.tasks.Get(ctx, id)
 }
 
-func (tm *TaskManager) Add(ctx context.Context, task runtime.Task) error {
-	return tm.tasks.Add(ctx, task)
+func (manager *TaskManager) Add(ctx context.Context, task runtime.Task) error {
+	return manager.tasks.Add(ctx, task)
 }
 
-func (tm *TaskManager) Delete(ctx context.Context, id string) {
-	tm.tasks.Delete(ctx, id)
+func (manager *TaskManager) Delete(ctx context.Context, id string) {
+	manager.tasks.Delete(ctx, id)
 }
 
-func (tm *TaskManager) Tasks(ctx context.Context, all bool) ([]runtime.Task, error) {
-	return tm.tasks.GetAll(ctx, all)
+func (manager *TaskManager) Tasks(ctx context.Context, all bool) ([]runtime.Task, error) {
+	return manager.tasks.GetAll(ctx, all)
 }
 
-func (tm *TaskManager) init() (retErr error) {
-	err := shimebpf.EnsurePidMonitorRunning(tm.stateDir)
+func (manager *TaskManager) init() (retErr error) {
+	err := shimebpf.EnsurePidMonitorRunning(manager.stateDir)
 	if err != nil {
 		return err
 	}
 
-	tm.idAlloc, err = newIDAllocator(tm.stateDir, traceEventIDDBName)
+	manager.idAlloc, err = newIDAllocator(manager.stateDir, traceEventIDDBName)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		if retErr != nil {
-			tm.idAlloc.close()
+			manager.idAlloc.close()
 		}
 	}()
 
-	tm.monitor, err = newMonitor(tm.stateDir)
+	manager.monitor, err = newMonitor(manager.stateDir)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func (manager *TaskManager) nextTraceEventID() (uint64, error) {
+	return manager.idAlloc.nextID()
+}
+
+func (manager *TaskManager) traceInitProcess(init *initProcess) error {
+	return manager.monitor.traceInitProcess(init)
+}
+
+func (manager *TaskManager) repollingInitProcess(init *initProcess) error {
+	return manager.monitor.repollingInitProcess(init)
+}
+
+func (manager *TaskManager) cleanInitProcessTraceEvent(init *initProcess) error {
+	return manager.monitor.store.DelExitedTask(init.traceEventID)
+}
+
+func initOptionsFromCreateOpts(createOpts runtime.CreateOpts) (*options.Options, error) {
+	opts := createOpts.RuntimeOptions
+	if opts == nil {
+		opts = createOpts.TaskOptions
+	}
+
+	initOpts := &options.Options{}
+	if opts != nil && opts.GetTypeUrl() != "" {
+		v, err := typeurl.UnmarshalAny(opts)
+		if err != nil {
+			return nil, err
+		}
+
+		if vopts, ok := v.(*options.Options); ok {
+			initOpts = vopts
+		}
+	}
+	return initOpts, nil
 }

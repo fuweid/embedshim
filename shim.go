@@ -4,40 +4,46 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
+	"time"
 
 	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
 
 	"github.com/containerd/console"
 	"github.com/containerd/containerd/errdefs"
+	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/runtime"
-	"github.com/containerd/containerd/runtime/v2/runc/options"
 	ptypes "github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
-type embedShim struct {
-	tm *TaskManager
+var deferCleanupTimeout = 30 * time.Second
 
-	b     *pkgbundle.Bundle
-	ropts *options.Options
-	init  *initProcess
+type shim struct {
+	manager *TaskManager
+
+	bundle *pkgbundle.Bundle
+	init   *initProcess
 }
 
-func newEmbedShim(tm *TaskManager, b *pkgbundle.Bundle) *embedShim {
-	return &embedShim{
-		tm:    tm,
-		b:     b,
-		ropts: &options.Options{},
+func newShim(manager *TaskManager, bundle *pkgbundle.Bundle) (*shim, error) {
+	init, err := newInitProcess(bundle)
+	if err != nil {
+		return nil, err
 	}
+
+	return &shim{
+		manager: manager,
+		bundle:  bundle,
+		init:    init,
+	}, nil
 }
 
-func (es *embedShim) Create(ctx context.Context, opts runtime.CreateOpts) (_ runtime.Task, retErr error) {
+func (s *shim) Create(ctx context.Context, opts runtime.CreateOpts) (_ runtime.Task, retErr error) {
 	rootfs := ""
 	if len(opts.Rootfs) > 0 {
-		rootfs = filepath.Join(es.b.Path, "rootfs")
+		rootfs = s.bundle.Rootfs()
 		if err := os.Mkdir(rootfs, 0711); err != nil && !os.IsExist(err) {
 			return nil, err
 		}
@@ -57,78 +63,74 @@ func (es *embedShim) Create(ctx context.Context, opts runtime.CreateOpts) (_ run
 		}
 	}
 
-	p, err := es.newInit()
-	if err != nil {
-		return nil, err
-	}
-
-	if err := p.Create(ctx); err != nil {
+	if err := s.init.Create(ctx); err != nil {
 		return nil, err
 	}
 
 	defer func() {
 		if retErr != nil {
-			// TODO(fuweid): use defer context like CRI plugin
-			p.Delete(ctx)
+			deferCtx, deferCancel := deferContext()
+			defer deferCancel()
+
+			if derr := s.init.Delete(deferCtx); derr != nil {
+				log.G(ctx).WithError(derr).Warnf("failed to clean %s in rollback", s.init)
+			}
 		}
 	}()
 
-	if err := es.tm.monitor.traceInitProcess(p); err != nil {
+	if err := s.manager.traceInitProcess(s.init); err != nil {
 		return nil, err
 	}
-	es.init = p
-	return es, nil
+	return s, nil
 }
 
-func (es *embedShim) ID() string {
-	return es.b.ID
+func (s *shim) ID() string {
+	return s.bundle.ID
 }
 
-func (es *embedShim) PID() uint32 {
-	return uint32(es.init.Pid())
+func (s *shim) PID() uint32 {
+	return uint32(s.init.Pid())
 }
 
-func (es *embedShim) Namespace() string {
-	return es.b.Namespace
+func (s *shim) Namespace() string {
+	return s.bundle.Namespace
 }
 
-func (es *embedShim) Pause(ctx context.Context) error {
+func (s *shim) Pause(ctx context.Context) error {
 	return fmt.Errorf("pause not implemented yet")
 }
 
-func (es *embedShim) Resume(ctx context.Context) error {
+func (s *shim) Resume(ctx context.Context) error {
 	return fmt.Errorf("resume not implemented yet")
 }
 
-func (es *embedShim) Start(ctx context.Context) error {
-	return es.init.Start(ctx)
+func (s *shim) Start(ctx context.Context) error {
+	return s.init.Start(ctx)
 }
 
-func (es *embedShim) Kill(ctx context.Context, signal uint32, all bool) error {
-	return es.init.Kill(ctx, signal, all)
+func (s *shim) Kill(ctx context.Context, signal uint32, all bool) error {
+	return s.init.Kill(ctx, signal, all)
 }
 
-func (es *embedShim) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
+func (s *shim) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
 	return nil, fmt.Errorf("exec not implemented yet")
 }
 
-func (es *embedShim) Pids(ctx context.Context) ([]runtime.ProcessInfo, error) {
+func (s *shim) Pids(ctx context.Context) ([]runtime.ProcessInfo, error) {
 	return []runtime.ProcessInfo{
-		{
-			Pid: es.PID(),
-		},
+		{Pid: s.PID()},
 	}, nil
 }
 
-func (es *embedShim) ResizePty(ctx context.Context, size runtime.ConsoleSize) error {
-	return es.init.Resize(console.WinSize{
+func (s *shim) ResizePty(ctx context.Context, size runtime.ConsoleSize) error {
+	return s.init.Resize(console.WinSize{
 		Width:  uint16(size.Width),
 		Height: uint16(size.Height),
 	})
 }
 
-func (es *embedShim) CloseIO(ctx context.Context) error {
-	if stdin := es.init.Stdin(); stdin != nil {
+func (s *shim) CloseIO(ctx context.Context) error {
+	if stdin := s.init.Stdin(); stdin != nil {
 		if err := stdin.Close(); err != nil {
 			return err
 		}
@@ -136,47 +138,48 @@ func (es *embedShim) CloseIO(ctx context.Context) error {
 	return nil
 }
 
-func (es *embedShim) Wait(ctx context.Context) (*runtime.Exit, error) {
-	taskPid := es.PID()
+func (s *shim) Wait(ctx context.Context) (*runtime.Exit, error) {
+	taskPid := s.PID()
 
 	// TODO: use ctx
-	es.init.Wait()
+	s.init.Wait()
 
 	return &runtime.Exit{
 		Pid:       taskPid,
-		Timestamp: es.init.ExitedAt(),
-		Status:    uint32(es.init.ExitStatus()),
+		Timestamp: s.init.ExitedAt(),
+		Status:    uint32(s.init.ExitStatus()),
 	}, nil
 }
 
-func (es *embedShim) Checkpoint(ctx context.Context, path string, options *ptypes.Any) error {
+func (s *shim) Checkpoint(ctx context.Context, path string, options *ptypes.Any) error {
 	return fmt.Errorf("checkpoint not implemented yet")
 }
 
-func (es *embedShim) Close() error {
+func (s *shim) Close() error {
 	return nil
 }
 
-func (es *embedShim) Update(ctx context.Context, resources *ptypes.Any, _ map[string]string) error {
-	return es.init.Update(ctx, resources)
+func (s *shim) Update(ctx context.Context, resources *ptypes.Any, _ map[string]string) error {
+	return s.init.Update(ctx, resources)
 }
 
-func (es *embedShim) Stats(ctx context.Context) (*ptypes.Any, error) {
+func (s *shim) Stats(ctx context.Context) (*ptypes.Any, error) {
 	return nil, fmt.Errorf("Stats not implemented yet")
 }
 
-func (es *embedShim) Process(ctx context.Context, id string) (runtime.Process, error) {
-	if es.b.ID != id {
+func (s *shim) Process(ctx context.Context, id string) (runtime.Process, error) {
+	if s.bundle.ID != id {
 		return nil, fmt.Errorf("exec %s: %w", id, errdefs.ErrNotFound)
 	}
-	if _, err := es.init.Status(ctx); err != nil {
+
+	if _, err := s.init.Status(ctx); err != nil {
 		return nil, err
 	}
-	return es, nil
+	return s, nil
 }
 
-func (es *embedShim) State(ctx context.Context) (runtime.State, error) {
-	st, err := es.init.Status(ctx)
+func (s *shim) State(ctx context.Context) (runtime.State, error) {
+	st, err := s.init.Status(ctx)
 	if err != nil {
 		return runtime.State{}, err
 	}
@@ -191,37 +194,37 @@ func (es *embedShim) State(ctx context.Context) (runtime.State, error) {
 		status = runtime.StoppedStatus
 	}
 	return runtime.State{
-		Pid:        uint32(es.init.pid),
+		Pid:        uint32(s.init.pid),
 		Status:     status,
-		Stdin:      es.init.stdio.Stdin,
-		Stdout:     es.init.stdio.Stdout,
-		Stderr:     es.init.stdio.Stderr,
-		Terminal:   es.init.stdio.Terminal,
-		ExitStatus: uint32(es.init.ExitStatus()),
-		ExitedAt:   es.init.ExitedAt(),
+		Stdin:      s.init.stdio.Stdin,
+		Stdout:     s.init.stdio.Stdout,
+		Stderr:     s.init.stdio.Stderr,
+		Terminal:   s.init.stdio.Terminal,
+		ExitStatus: uint32(s.init.ExitStatus()),
+		ExitedAt:   s.init.ExitedAt(),
 	}, nil
 }
 
-func (es *embedShim) Delete(ctx context.Context) (*runtime.Exit, error) {
-	err := es.init.Delete(ctx)
+func (s *shim) Delete(ctx context.Context) (*runtime.Exit, error) {
+	err := s.init.Delete(ctx)
 	if err != nil && !errors.Is(err, errdefs.ErrNotFound) {
 		return nil, err
 	}
 
-	if err := es.b.Delete(); err != nil {
+	if err := s.bundle.Delete(); err != nil {
 		return nil, err
 	}
 
-	// TODO: reconstruct the cleanup-resource
-	es.tm.monitor.store.DelExitedTask(es.init.traceEventID)
-	es.tm.Delete(ctx, es.init.ID())
+	s.manager.cleanInitProcessTraceEvent(s.init)
+	s.manager.Delete(ctx, s.init.ID())
+
 	return &runtime.Exit{
-		Pid:       uint32(es.init.pid),
-		Status:    uint32(es.init.ExitStatus()),
-		Timestamp: es.init.ExitedAt(),
+		Pid:       uint32(s.init.pid),
+		Status:    uint32(s.init.ExitStatus()),
+		Timestamp: s.init.ExitedAt(),
 	}, nil
 }
 
-func (es *embedShim) newInit() (*initProcess, error) {
-	return newInitProcess(es.b)
+func deferContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.TODO(), deferCleanupTimeout)
 }
