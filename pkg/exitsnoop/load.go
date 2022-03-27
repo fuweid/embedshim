@@ -1,4 +1,4 @@
-package ebpf
+package exitsnoop
 
 import (
 	"bytes"
@@ -12,9 +12,9 @@ import (
 	"github.com/containerd/containerd/mount"
 )
 
-//go:generate cp ../../bpf/.output/pid_monitor.bpf.o pid_monitor.bpf.o
+//go:generate cp ../../bpf/.output/exitsnoop.bpf.o exitsnoop.bpf.o
 var (
-	//go:embed pid_monitor.bpf.o
+	//go:embed exitsnoop.bpf.o
 	progByteCode []byte
 
 	// bpffsMagic is bpf filesystem magic number.
@@ -22,19 +22,21 @@ var (
 	// https://github.com/torvalds/linux/blob/master/include/uapi/linux/magic.h
 	bpffsMagic = int64(0xcafe4a11)
 
-	pinnedDir = ".pid_monitor"
+	pinnedDir = ".exitsnoop.bpf"
 
-	bpfProgSchedProcessExit = "monitor"
+	bpfProgName        = "handle_sched_process_exit"
+	bpfMapTracingTasks = "tracing_tasks"
+	bpfMapExitedEvents = "exited_tasks"
 )
 
-func EnsurePidMonitorRunning(bpffsRoot string) error {
+func EnsureRunning(bpffsRoot string) error {
 	rootDir := filepath.Join(bpffsRoot, pinnedDir)
 
 	if err := ensureBPFFsMount(rootDir); err != nil {
 		return err
 	}
 
-	_, err := os.Stat(filepath.Join(rootDir, bpfProgSchedProcessExit))
+	_, err := os.Stat(filepath.Join(rootDir, bpfProgName))
 	if err == nil {
 		return nil
 	}
@@ -72,7 +74,7 @@ func EnsurePidMonitorRunning(bpffsRoot string) error {
 
 	l, err := link.AttachRawTracepoint(link.RawTracepointOptions{
 		Name:    "sched_process_exit",
-		Program: collection.Programs[bpfProgSchedProcessExit],
+		Program: collection.Programs[bpfProgName],
 	})
 	if err != nil {
 		return err
@@ -84,9 +86,9 @@ func EnsurePidMonitorRunning(bpffsRoot string) error {
 			Pin(string) error
 		}
 	}{
-		{bpfMapRunningTasks, collection.Maps[bpfMapRunningTasks]},
-		{bpfMapExitedTasks, collection.Maps[bpfMapExitedTasks]},
-		{bpfProgSchedProcessExit, l},
+		{bpfMapTracingTasks, collection.Maps[bpfMapTracingTasks]},
+		{bpfMapExitedEvents, collection.Maps[bpfMapExitedEvents]},
+		{bpfProgName, l},
 	} {
 		if err := pinnable.obj.Pin(filepath.Join(rootDir, pinnable.name)); err != nil {
 			return err
@@ -122,9 +124,9 @@ func ensureBPFFsMount(bpffsRoot string) error {
 
 func cleanupLeakyObjs(rootDir string) error {
 	for _, name := range []string{
-		bpfProgSchedProcessExit,
-		bpfMapExitedTasks,
-		bpfMapRunningTasks,
+		bpfProgName,
+		bpfMapTracingTasks,
+		bpfMapExitedEvents,
 	} {
 		if err := os.Remove(filepath.Join(rootDir, name)); err != nil && !os.IsNotExist(err) {
 			return err

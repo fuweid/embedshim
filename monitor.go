@@ -8,7 +8,7 @@ import (
 	"sync"
 	"syscall"
 
-	shimebpf "github.com/fuweid/embedshim/pkg/ebpf"
+	"github.com/fuweid/embedshim/pkg/exitsnoop"
 	"github.com/fuweid/embedshim/pkg/pidfd"
 
 	"github.com/cilium/ebpf"
@@ -25,7 +25,7 @@ type monitor struct {
 	sync.Mutex
 
 	pidPoller *pidfd.Epoller
-	store     *shimebpf.SchedProcessExitStore
+	store     *exitsnoop.Store
 }
 
 func newMonitor(stateDir string) (_ *monitor, retErr error) {
@@ -39,7 +39,7 @@ func newMonitor(stateDir string) (_ *monitor, retErr error) {
 		}
 	}()
 
-	store, err := shimebpf.NewSchedProcessExitStore(stateDir)
+	store, err := exitsnoop.NewStore(stateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -88,16 +88,16 @@ func (m *monitor) traceInitProcess(init *initProcess) (retErr error) {
 		return fmt.Errorf("failed to get pidns info: %w", err)
 	}
 
-	if err := m.store.InsertRunningTask(uint32(init.Pid()), &shimebpf.TaskInfo{
-		ID:        init.traceEventID,
+	if err := m.store.Trace(uint32(init.Pid()), &exitsnoop.TaskInfo{
+		TraceID:   init.traceEventID,
 		PidnsInfo: nsInfo,
 	}); err != nil {
 		return fmt.Errorf("failed to insert taskinfo for %s: %w", init, err)
 	}
 	defer func() {
 		if retErr != nil {
-			m.store.DelRunningTask(uint32(init.Pid()))
-			m.store.DelExitedTask(init.traceEventID)
+			m.store.DeleteTracingTask(uint32(init.Pid()))
+			m.store.DeleteExitedEvent(init.traceEventID)
 		}
 	}()
 
@@ -109,7 +109,7 @@ func (m *monitor) traceInitProcess(init *initProcess) (retErr error) {
 
 	if err := m.pidPoller.Add(fd, func() error {
 		// TODO(fuweid): do we need to the pid value in event?
-		status, err := m.store.GetExitedTask(init.traceEventID)
+		status, err := m.store.GetExitedEvent(init.traceEventID)
 		if err != nil {
 			init.SetExited(unexpectedExitCode)
 			return fmt.Errorf("failed to get exited status: %w", err)
@@ -128,8 +128,8 @@ func (m *monitor) repollingInitProcess(init *initProcess) (retErr error) {
 	var (
 		eventID = init.traceEventID
 
-		exitedStatus *shimebpf.TaskExitStatus
-		taskInfo     *shimebpf.TaskInfo
+		exitedStatus *exitsnoop.ExitStatus
+		taskInfo     *exitsnoop.TaskInfo
 
 		fd      pidfd.FD
 		closeFD bool
@@ -137,7 +137,7 @@ func (m *monitor) repollingInitProcess(init *initProcess) (retErr error) {
 	)
 
 	// fast path: check exit event from exitsnoop
-	exitedStatus, err = m.store.GetExitedTask(eventID)
+	exitedStatus, err = m.store.GetExitedEvent(eventID)
 	if err == nil {
 		init.SetExited(int(exitedStatus.ExitCode))
 		return nil
@@ -160,7 +160,7 @@ func (m *monitor) repollingInitProcess(init *initProcess) (retErr error) {
 		}
 	}()
 
-	taskInfo, err = m.store.GetRunningTask(uint32(init.Pid()))
+	taskInfo, err = m.store.GetTracingTask(uint32(init.Pid()))
 	if err != nil {
 		if !errors.Is(err, ebpf.ErrKeyNotExist) {
 			return err
@@ -169,13 +169,13 @@ func (m *monitor) repollingInitProcess(init *initProcess) (retErr error) {
 	}
 
 	// Just in case, the pid has been reused by other init process
-	if taskInfo != nil && taskInfo.ID == eventID {
+	if taskInfo != nil && taskInfo.TraceID == eventID {
 		// TODO(fuweid): Ugly! Need interface here.
 		init.initState.(*createdState).transition("running")
 
 		return m.pidPoller.Add(fd, func() error {
 			// TODO(fuweid): do we need to the pid value in event?
-			exitedStatus, err = m.store.GetExitedTask(init.traceEventID)
+			exitedStatus, err = m.store.GetExitedEvent(init.traceEventID)
 			if err != nil {
 				init.SetExited(unexpectedExitCode)
 				return fmt.Errorf("failed to get exited status: %w", err)
@@ -190,7 +190,7 @@ func (m *monitor) repollingInitProcess(init *initProcess) (retErr error) {
 	closeFD = false
 
 set_exitedstatus:
-	exitedStatus, err = m.store.GetExitedTask(eventID)
+	exitedStatus, err = m.store.GetExitedEvent(eventID)
 	if err != nil {
 		init.SetExited(unexpectedExitCode)
 		return err
@@ -200,13 +200,13 @@ set_exitedstatus:
 	return nil
 }
 
-func getPidnsInfo(pid uint32) (shimebpf.PidnsInfo, error) {
+func getPidnsInfo(pid uint32) (exitsnoop.PidnsInfo, error) {
 	f, err := os.Stat(filepath.Join("/proc", strconv.Itoa(int(pid)), "ns", "pid"))
 	if err != nil {
-		return shimebpf.PidnsInfo{}, err
+		return exitsnoop.PidnsInfo{}, err
 	}
 
-	return shimebpf.PidnsInfo{
+	return exitsnoop.PidnsInfo{
 		Dev: (f.Sys().(*syscall.Stat_t)).Dev,
 		Ino: (f.Sys().(*syscall.Stat_t)).Ino,
 	}, nil

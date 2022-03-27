@@ -6,7 +6,7 @@ import (
 	"os"
 
 	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
-	shimebpf "github.com/fuweid/embedshim/pkg/ebpf"
+	"github.com/fuweid/embedshim/pkg/exitsnoop"
 
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/events/exchange"
@@ -162,7 +162,7 @@ func (manager *TaskManager) Tasks(ctx context.Context, all bool) ([]runtime.Task
 }
 
 func (manager *TaskManager) init() (retErr error) {
-	err := shimebpf.EnsurePidMonitorRunning(manager.stateDir)
+	err := exitsnoop.EnsureRunning(manager.stateDir)
 	if err != nil {
 		return err
 	}
@@ -197,7 +197,7 @@ func (manager *TaskManager) repollingInitProcess(init *initProcess) error {
 }
 
 func (manager *TaskManager) cleanInitProcessTraceEvent(init *initProcess) error {
-	return manager.monitor.store.DelExitedTask(init.traceEventID)
+	return manager.monitor.store.DeleteExitedEvent(init.traceEventID)
 }
 
 func initOptionsFromCreateOpts(createOpts runtime.CreateOpts) (*options.Options, error) {
