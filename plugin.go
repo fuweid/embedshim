@@ -1,25 +1,12 @@
-/*
-   Copyright The containerd Authors.
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
-*/
-
 package embedshim
 
 import (
 	"context"
 	"fmt"
 	"os"
+
+	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
+	"github.com/fuweid/embedshim/pkg/exitsnoop"
 
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/events/exchange"
@@ -29,13 +16,16 @@ import (
 	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/plugin"
 	"github.com/containerd/containerd/runtime"
-	shimebpf "github.com/fuweid/embedshim/pkg/ebpf"
+	"github.com/containerd/containerd/runtime/v2/runc/options"
+	"github.com/containerd/typeurl"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
 
 var (
 	pluginID = fmt.Sprintf("%s.%s", plugin.RuntimePlugin, "embed")
+
+	traceEventIDDBName = "trace_event_id.db"
 )
 
 type Config struct{}
@@ -91,20 +81,21 @@ func New(ic *plugin.InitContext) (interface{}, error) {
 type TaskManager struct {
 	rootDir  string
 	stateDir string
+	config   *Config
 
 	tasks      *runtime.TaskList
 	containers containers.Store
 	events     *exchange.Exchange
 
-	config  *Config
+	idAlloc *idAllocator
 	monitor *monitor
 }
 
-func (tm *TaskManager) ID() string {
+func (*TaskManager) ID() string {
 	return pluginID
 }
 
-func (tm *TaskManager) Create(ctx context.Context, id string, opts runtime.CreateOpts) (_ runtime.Task, retErr error) {
+func (manager *TaskManager) Create(ctx context.Context, id string, opts runtime.CreateOpts) (_ runtime.Task, retErr error) {
 	if err := identifiers.Validate(id); err != nil {
 		return nil, errors.Wrapf(err, "invalid task id %s", id)
 	}
@@ -114,7 +105,23 @@ func (tm *TaskManager) Create(ctx context.Context, id string, opts runtime.Creat
 		return nil, err
 	}
 
-	bundle, err := NewBundle(ctx, tm.rootDir, tm.stateDir, id, ns, opts)
+	traceEventID, err := manager.nextTraceEventID()
+	if err != nil {
+		return nil, err
+	}
+
+	initOpts, err := initOptionsFromCreateOpts(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	bundle, err := pkgbundle.NewBundle(manager.rootDir, manager.stateDir,
+		ns, id,
+		withBundleApplyInitOCISpec(opts.Spec),
+		withBundleApplyInitOptions(initOpts),
+		withBundleApplyInitStdio(opts.IO),
+		withBundleApplyInitTraceEventID(traceEventID),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -124,56 +131,91 @@ func (tm *TaskManager) Create(ctx context.Context, id string, opts runtime.Creat
 		}
 	}()
 
-	es := newEmbedShim(tm, bundle)
-	t, err := es.Create(ctx, opts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create init process: %w", err)
-	}
-
-	defer func() {
-		if retErr != nil {
-			// TODO: use timeout context
-			es.Delete(context.TODO())
-		}
-	}()
-
-	err = tm.monitor.subscribe(
-		ns, id, t.PID(),
-		func(exited *shimebpf.TaskExitStatus) error {
-			es.init.SetExited(int(exited.ExitCode))
-			return nil
-		},
-	)
+	s, err := newShim(manager, bundle)
 	if err != nil {
 		return nil, err
 	}
 
-	tm.tasks.Add(ctx, t)
-	return t, nil
+	task, err := s.Create(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create init process: %w", err)
+	}
+
+	manager.tasks.Add(ctx, task)
+	return task, nil
 }
 
-func (tm *TaskManager) Get(ctx context.Context, id string) (runtime.Task, error) {
-	return tm.tasks.Get(ctx, id)
+func (manager *TaskManager) Get(ctx context.Context, id string) (runtime.Task, error) {
+	return manager.tasks.Get(ctx, id)
 }
 
-func (tm *TaskManager) Add(ctx context.Context, task runtime.Task) error {
-	return tm.tasks.Add(ctx, task)
+func (manager *TaskManager) Add(ctx context.Context, task runtime.Task) error {
+	return manager.tasks.Add(ctx, task)
 }
 
-func (tm *TaskManager) Delete(ctx context.Context, id string) {
-	tm.tasks.Delete(ctx, id)
+func (manager *TaskManager) Delete(ctx context.Context, id string) {
+	manager.tasks.Delete(ctx, id)
 }
 
-func (tm *TaskManager) Tasks(ctx context.Context, all bool) ([]runtime.Task, error) {
-	return tm.tasks.GetAll(ctx, all)
+func (manager *TaskManager) Tasks(ctx context.Context, all bool) ([]runtime.Task, error) {
+	return manager.tasks.GetAll(ctx, all)
 }
 
-func (tm *TaskManager) init() error {
-	err := shimebpf.EnsurePidMonitorRunning(tm.stateDir)
+func (manager *TaskManager) init() (retErr error) {
+	err := exitsnoop.EnsureRunning(manager.rootDir)
 	if err != nil {
 		return err
 	}
 
-	tm.monitor, err = newMonitor(tm.stateDir)
-	return err
+	manager.idAlloc, err = newIDAllocator(manager.rootDir, traceEventIDDBName)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if retErr != nil {
+			manager.idAlloc.close()
+		}
+	}()
+
+	manager.monitor, err = newMonitor(manager.rootDir)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (manager *TaskManager) nextTraceEventID() (uint64, error) {
+	return manager.idAlloc.nextID()
+}
+
+func (manager *TaskManager) traceInitProcess(init *initProcess) error {
+	return manager.monitor.traceInitProcess(init)
+}
+
+func (manager *TaskManager) repollingInitProcess(init *initProcess) error {
+	return manager.monitor.repollingInitProcess(init)
+}
+
+func (manager *TaskManager) cleanInitProcessTraceEvent(init *initProcess) error {
+	return manager.monitor.store.DeleteExitedEvent(init.traceEventID)
+}
+
+func initOptionsFromCreateOpts(createOpts runtime.CreateOpts) (*options.Options, error) {
+	opts := createOpts.RuntimeOptions
+	if opts == nil {
+		opts = createOpts.TaskOptions
+	}
+
+	initOpts := &options.Options{}
+	if opts != nil && opts.GetTypeUrl() != "" {
+		v, err := typeurl.UnmarshalAny(opts)
+		if err != nil {
+			return nil, err
+		}
+
+		if vopts, ok := v.(*options.Options); ok {
+			initOpts = vopts
+		}
+	}
+	return initOpts, nil
 }

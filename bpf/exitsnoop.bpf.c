@@ -11,7 +11,7 @@ struct pidns_info {
 };
 
 struct task_info {
-	__u64 tid;
+	__u64 trace_id;
 	struct pidns_info pidns;
 };
 
@@ -27,17 +27,17 @@ struct {
     __uint(max_entries, 2048);
     __type(key, pid_t);
     __type(value, struct task_info);
-} running_tasks SEC(".maps");
+} tracing_tasks SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 2048);
     __type(key, __u64);
     __type(value, struct exit_status);
-} exited_tasks SEC(".maps");
+} exited_events SEC(".maps");
 
 SEC("raw_tracepoint/sched_process_exit")
-int monitor(void* ctx) {
+int handle_sched_process_exit(void* ctx) {
     struct task_struct *task;
     struct task_info *rt;
     struct exit_status status;
@@ -54,7 +54,7 @@ int monitor(void* ctx) {
     if (pid != tid)
         return 0;
 
-    rt = (struct task_info *)bpf_map_lookup_elem(&running_tasks, &pid);
+    rt = (struct task_info *)bpf_map_lookup_elem(&tracing_tasks, &pid);
     if (!rt) 
         return 0;
 
@@ -73,7 +73,7 @@ int monitor(void* ctx) {
     status.exit_code = BPF_CORE_READ(task, exit_code);
     status.start_boottime = BPF_CORE_READ(task, start_boottime);
     status.exited_time = bpf_ktime_get_ns();
-    bpf_map_update_elem(&exited_tasks, &rt->tid, &status, BPF_NOEXIST);
-    bpf_map_delete_elem(&running_tasks, &pid);
+    bpf_map_update_elem(&exited_events, &rt->trace_id, &status, BPF_NOEXIST);
+    bpf_map_delete_elem(&tracing_tasks, &pid);
     return 0;
 }

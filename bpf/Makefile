@@ -19,7 +19,7 @@ else
 	Q = @
 endif
 
-APPS := pid_monitor
+APPS := exitsnoop
 
 BINARIES=$(patsubst %,$(OUTPUT)/%.bpf.o,$(APPS))
 

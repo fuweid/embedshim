@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"reflect"
 	"sync"
 	"syscall"
 
@@ -100,7 +101,7 @@ func (i *pipeIO) Close() error {
 		i.out,
 		i.err,
 	} {
-		if v != nil {
+		if !reflect.ValueOf(v).IsNil() {
 			if cerr := v.Close(); err == nil {
 				err = cerr
 			}
@@ -150,7 +151,7 @@ func (p *processIO) IO() runc.IO {
 	return p.io
 }
 
-func (p *processIO) Copy() error {
+func (p *processIO) CopyStdin() error {
 	if p.stdio.Stdin == "" {
 		return nil
 	}
@@ -175,67 +176,6 @@ func (p *processIO) Copy() error {
 	return nil
 }
 
-// newRuncPipeIO creates stdin pipe pairs and RW-mode fifo to be used with runc.
-func newRuncPipeIO(uid, gid int, stdio stdio.Stdio) (_ runc.IO, err error) {
-	option := &runc.IOOption{
-		OpenStdin:  true,
-		OpenStdout: true,
-		OpenStderr: true,
-	}
-	withConditionalIO(stdio)(option)
-
-	var (
-		pipes          []io.Closer
-		stdin          *pipe
-		stdout, stderr *os.File
-	)
-	// cleanup in case of an error
-	defer func() {
-		if err != nil {
-			for _, p := range pipes {
-				p.Close()
-			}
-		}
-	}()
-	if option.OpenStdin {
-		if stdin, err = newPipe(); err != nil {
-			return nil, err
-		}
-
-		pipes = append(pipes, stdin)
-		if err = unix.Fchown(int(stdin.r.Fd()), uid, gid); err != nil {
-			return nil, errors.Wrap(err, "failed to chown stdin")
-		}
-	}
-	if option.OpenStdout {
-		stdout, err = openRWFifo(context.TODO(), stdio.Stdout, 0700)
-		if err != nil {
-			return nil, err
-		}
-
-		pipes = append(pipes, stdout)
-		if err = unix.Fchown(int(stdout.Fd()), uid, gid); err != nil {
-			return nil, errors.Wrap(err, "failed to chown stdout")
-		}
-	}
-	if option.OpenStderr {
-		stderr, err = openRWFifo(context.TODO(), stdio.Stderr, 0700)
-		if err != nil {
-			return nil, err
-		}
-
-		pipes = append(pipes, stderr)
-		if err = unix.Fchown(int(stderr.Fd()), uid, gid); err != nil {
-			return nil, errors.Wrap(err, "failed to chown stderr")
-		}
-	}
-	return &pipeIO{
-		in:  stdin,
-		out: stdout,
-		err: stderr,
-	}, nil
-}
-
 func createIO(ctx context.Context, id string, ioUID, ioGID int, stdio stdio.Stdio) (*processIO, error) {
 	pio := &processIO{
 		stdio: stdio,
@@ -252,8 +192,9 @@ func createIO(ctx context.Context, id string, ioUID, ioGID int, stdio stdio.Stdi
 
 	u, err := url.Parse(stdio.Stdout)
 	if err != nil {
-		return nil, errors.Wrap(err, "unable to parse stdout uri")
+		return nil, fmt.Errorf("unable to parse stdout uri: %w", err)
 	}
+
 	if u.Scheme == "" {
 		u.Scheme = "fifo"
 	}
@@ -261,10 +202,102 @@ func createIO(ctx context.Context, id string, ioUID, ioGID int, stdio stdio.Stdi
 	case "fifo":
 		pio.io, err = newRuncPipeIO(ioUID, ioGID, stdio)
 	default:
-		return nil, errors.Errorf("unknown STDIO scheme %s", u.Scheme)
+		return nil, fmt.Errorf("unknown STDIO scheme %s", u.Scheme)
 	}
 	if err != nil {
 		return nil, err
 	}
 	return pio, nil
+}
+
+// newRuncPipeIO creates stdin pipe pairs and RW-mode fifo to be used with runc.
+func newRuncPipeIO(uid, gid int, stdio stdio.Stdio) (_ runc.IO, err error) {
+	option := defaultIOOption()
+
+	withConditionalIO(stdio)(option)
+
+	var (
+		pipes          []io.Closer
+		stdin          *pipe
+		stdout, stderr *os.File
+	)
+
+	// cleanup in case of an error
+	defer func() {
+		if err != nil {
+			for _, p := range pipes {
+				p.Close()
+			}
+		}
+	}()
+
+	if option.OpenStdin {
+		if stdin, err = newPipe(); err != nil {
+			return nil, err
+		}
+
+		pipes = append(pipes, stdin)
+		if err = unix.Fchown(int(stdin.r.Fd()), uid, gid); err != nil {
+			return nil, errors.Wrap(err, "failed to chown stdin")
+		}
+	}
+
+	if option.OpenStdout {
+		stdout, err = openRWFifo(context.TODO(), stdio.Stdout, 0700)
+		if err != nil {
+			return nil, err
+		}
+
+		pipes = append(pipes, stdout)
+		if err = unix.Fchown(int(stdout.Fd()), uid, gid); err != nil {
+			return nil, errors.Wrap(err, "failed to chown stdout")
+		}
+	}
+
+	if option.OpenStderr {
+		stderr, err = openRWFifo(context.TODO(), stdio.Stderr, 0700)
+		if err != nil {
+			return nil, err
+		}
+
+		pipes = append(pipes, stderr)
+		if err = unix.Fchown(int(stderr.Fd()), uid, gid); err != nil {
+			return nil, errors.Wrap(err, "failed to chown stderr")
+		}
+	}
+
+	return &pipeIO{
+		in:  stdin,
+		out: stdout,
+		err: stderr,
+	}, nil
+}
+
+func defaultIOOption() *runc.IOOption {
+	return &runc.IOOption{
+		OpenStdin:  true,
+		OpenStdout: true,
+		OpenStderr: true,
+	}
+}
+
+func withConditionalIO(c stdio.Stdio) runc.IOOpt {
+	return func(o *runc.IOOption) {
+		o.OpenStdin = c.Stdin != ""
+		o.OpenStdout = c.Stdout != ""
+		o.OpenStderr = c.Stderr != ""
+	}
+}
+
+func openRWFifo(ctx context.Context, fn string, perm os.FileMode) (*os.File, error) {
+	if _, err := os.Stat(fn); err != nil {
+		if os.IsNotExist(err) {
+			if err := syscall.Mkfifo(fn, uint32(perm&os.ModePerm)); err != nil && !os.IsExist(err) {
+				return nil, fmt.Errorf("error creating fifo %v: %w", fn, err)
+			}
+		} else {
+			return nil, err
+		}
+	}
+	return os.OpenFile(fn, syscall.O_RDWR, perm)
 }

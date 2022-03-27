@@ -6,13 +6,14 @@ import (
 	"io/ioutil"
 	"path/filepath"
 
+	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
+
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/containerd/pkg/stdio"
 )
 
-func (tm *TaskManager) reloadExistingTasks(ctx context.Context) error {
-	nsDirs, err := ioutil.ReadDir(tm.stateDir)
+func (manager *TaskManager) reloadExistingTasks(ctx context.Context) error {
+	nsDirs, err := ioutil.ReadDir(manager.stateDir)
 	if err != nil {
 		return err
 	}
@@ -28,7 +29,7 @@ func (tm *TaskManager) reloadExistingTasks(ctx context.Context) error {
 		}
 
 		log.G(ctx).WithField("namespace", ns).Info("loading tasks in namespace")
-		if err := tm.loadTasks(namespaces.WithNamespace(ctx, ns)); err != nil {
+		if err := manager.loadTasks(namespaces.WithNamespace(ctx, ns)); err != nil {
 			log.G(ctx).WithField("namespace", ns).WithError(err).Error("loading tasks in namespace")
 			continue
 		}
@@ -36,13 +37,13 @@ func (tm *TaskManager) reloadExistingTasks(ctx context.Context) error {
 	return nil
 }
 
-func (tm *TaskManager) loadTasks(ctx context.Context) error {
+func (manager *TaskManager) loadTasks(ctx context.Context) error {
 	ns, err := namespaces.NamespaceRequired(ctx)
 	if err != nil {
 		return err
 	}
 
-	shimDirs, err := ioutil.ReadDir(filepath.Join(tm.stateDir, ns))
+	shimDirs, err := ioutil.ReadDir(filepath.Join(manager.stateDir, ns))
 	if err != nil {
 		return err
 	}
@@ -57,96 +58,77 @@ func (tm *TaskManager) loadTasks(ctx context.Context) error {
 			continue
 		}
 
-		bundle, err := LoadBundle(ctx, tm.stateDir, id)
+		bundle, err := pkgbundle.LoadBundle(manager.stateDir, ns, id)
 		if err != nil {
 			return err
 		}
 
 		// fast path
-		bf, err := ioutil.ReadDir(bundle.Path)
+		if err := bundle.IsValid(); err != nil {
+			log.G(ctx).WithError(err).Errorf("bundle %s is invalid, cleanup", bundle.Path)
+			bundle.Delete()
+			continue
+		}
+
+		shim, err := manager.loadShim(ctx, bundle)
 		if err != nil {
-			bundle.Delete()
-			log.G(ctx).WithError(err).Errorf("fast path read bundle path for %s", bundle.Path)
-			continue
-		}
-
-		if len(bf) == 0 {
+			log.G(ctx).WithError(err).Errorf("failed to load exiting task %s", id)
 			bundle.Delete()
 			continue
 		}
 
-		if _, err := tm.containers.Get(ctx, id); err != nil {
-			log.G(ctx).WithError(err).Errorf("loading container %s", id)
-			bundle.Delete()
+		if _, err := manager.containers.Get(ctx, id); err != nil {
+			log.G(ctx).WithError(err).Errorf("failed to load container %s and start to delete task", id)
+			shim.Delete(ctx)
 			continue
 		}
-
-		shim, err := tm.loadEmbedShim(ctx, bundle)
-		if err != nil {
-			log.G(ctx).WithError(err).Errorf("loading exiting container %s", id)
-			bundle.Delete()
-			continue
-		}
-		tm.tasks.Add(ctx, shim)
+		manager.tasks.Add(ctx, shim)
 	}
 	return nil
 }
 
-func (tm *TaskManager) loadEmbedShim(ctx context.Context, bundle *Bundle) (_ *embedShim, retErr error) {
-	init, err := reconstructInit(ctx, bundle)
+func (manager *TaskManager) loadShim(ctx context.Context, bundle *pkgbundle.Bundle) (_ *shim, retErr error) {
+	init, err := renewInitProcess(bundle)
 	if err != nil {
 		return nil, err
 	}
+
 	defer func() {
 		if retErr != nil {
-			init.Delete(ctx)
+			deferCtx, deferCancel := deferContext()
+			defer deferCancel()
+
+			init.Delete(deferCtx)
+
+			manager.cleanInitProcessTraceEvent(init)
 		}
 	}()
 
-	if err := tm.monitor.resubscribe(ctx, init); err != nil {
+	if err := manager.repollingInitProcess(init); err != nil {
+		return nil, err
+	}
+	return renewShim(manager, init), nil
+}
+
+func renewShim(manager *TaskManager, init *initProcess) *shim {
+	return &shim{
+		manager: manager,
+		bundle:  init.bundle,
+		init:    init,
+	}
+}
+
+func renewInitProcess(bundle *pkgbundle.Bundle) (*initProcess, error) {
+	init, err := newInitProcess(bundle)
+	if err != nil {
 		return nil, err
 	}
 
-	shim := newEmbedShim(tm, bundle)
-	shim.init = init
-	return shim, nil
-}
-
-func reconstructInit(ctx context.Context, bundle *Bundle) (*Init, error) {
-	ioFile := newIospecFile(bundle.Path)
-	iospec, err := ioFile.Read()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read container iospec: %w", err)
-	}
-
-	pid, err := newPidFile(bundle.Path).Read()
+	pid, err := newPidFile(bundle).Read()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read container pidfile: %w", err)
 	}
 
-	runtime := NewRunc(
-		"",
-		filepath.Join(bundle.Path, "work"),
-		bundle.Namespace,
-		"", // use default runc
-		"",
-		false, // no systemd cgroup
-	)
-
-	p := NewInit(
-		bundle.ID,
-		runtime,
-		stdio.Stdio{
-			Stdin:    iospec.Stdin,
-			Stdout:   iospec.Stdout,
-			Stderr:   iospec.Stderr,
-			Terminal: iospec.Terminal,
-		},
-	)
-
-	p.pid = pid
-	p.Bundle = bundle.Path
-	p.Rootfs = filepath.Join(bundle.Path, "rootfs")
-	p.WorkDir = filepath.Join(bundle.Path, "work")
-	return p, nil
+	init.pid = pid
+	return init, nil
 }
