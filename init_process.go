@@ -44,8 +44,9 @@ type initProcess struct {
 	initState initState
 	bundle    *pkgbundle.Bundle
 
-	runtime *runc.Runc
-	options *options.Options
+	runtime      *runc.Runc
+	options      *options.Options
+	traceEventID uint64
 
 	wg sync.WaitGroup
 
@@ -75,6 +76,11 @@ func newInitProcess(bundle *pkgbundle.Bundle) (*initProcess, error) {
 		return nil, err
 	}
 
+	eventID, err := readInitTraceEventID(bundle)
+	if err != nil {
+		return nil, err
+	}
+
 	runtime := newRuncRuntime(
 		opts.Root,                          // for working dir
 		filepath.Join(bundle.Path, "work"), // for log.json
@@ -85,9 +91,10 @@ func newInitProcess(bundle *pkgbundle.Bundle) (*initProcess, error) {
 	)
 
 	p := &initProcess{
-		bundle:  bundle,
-		options: opts,
-		runtime: runtime,
+		bundle:       bundle,
+		options:      opts,
+		traceEventID: eventID,
+		runtime:      runtime,
 		stdio: stdio.Stdio{
 			Stdin:    initIO.Stdin,
 			Stdout:   initIO.Stdout,
@@ -435,6 +442,10 @@ func (p *initProcess) runtimeError(rErr error, msg string) error {
 	default:
 		return fmt.Errorf("%s: %s", msg, rMsg)
 	}
+}
+
+func (p *initProcess) String() string {
+	return fmt.Sprintf("init process(id=%v, namespace=%v)", p.ID(), p.bundle.Namespace)
 }
 
 // waitTimeout handles waiting on a waitgroup with a specified timeout.

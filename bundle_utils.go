@@ -69,7 +69,7 @@ func readInitTraceEventID(b *pkgbundle.Bundle) (uint64, error) {
 
 // withBundleApplyInitTraceEventID applies the bpf eventID with little-endian
 // binary into bundle.
-func withBundleApplyInitEventID(eventID uint64) pkgbundle.ApplyOpts {
+func withBundleApplyInitTraceEventID(eventID uint64) pkgbundle.ApplyOpts {
 	return func(b *pkgbundle.Bundle) error {
 		var value [8]byte
 		binary.LittleEndian.PutUint64(value[:], eventID)

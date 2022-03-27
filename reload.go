@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"path/filepath"
 
 	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
@@ -64,7 +65,7 @@ func (tm *TaskManager) loadTasks(ctx context.Context) error {
 		}
 
 		// fast path
-		bf, err := ioutil.ReadDir(b.Path)
+		bf, err := os.ReadDir(b.Path)
 		if err != nil {
 			b.Delete()
 			log.G(ctx).WithError(err).Errorf("fast path read bundle path for %s", b.Path)
@@ -101,10 +102,11 @@ func (tm *TaskManager) loadEmbedShim(ctx context.Context, b *pkgbundle.Bundle) (
 	defer func() {
 		if retErr != nil {
 			init.Delete(ctx)
+			tm.monitor.store.DelExitedTask(init.traceEventID)
 		}
 	}()
 
-	if err := tm.monitor.resubscribe(ctx, init); err != nil {
+	if err := tm.monitor.repollingInitProcess(init); err != nil {
 		return nil, err
 	}
 

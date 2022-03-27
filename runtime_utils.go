@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -103,4 +104,42 @@ func checkKillError(err error) error {
 		return fmt.Errorf("no such container: %w", errdefs.ErrNotFound)
 	}
 	return fmt.Errorf("unknown error after kill: %w", err)
+}
+
+// checkRuncInitAlive is to check the runc-init holding the exec.fifo in runc
+// root dir, which is used to prevent from pid reuse.
+func checkRuncInitAlive(init *initProcess) error {
+	var (
+		id  = init.ID()
+		pid = init.pid
+
+		execFIFO  = filepath.Join(init.runtime.Root, id, "exec.fifo")
+		procFDDir = filepath.Join("/proc", strconv.Itoa(int(pid)), "fd")
+	)
+
+	fdInfos, err := os.ReadDir(procFDDir)
+	if err != nil {
+		return fmt.Errorf("failed to read %v: %w", procFDDir, err)
+	}
+
+	for _, fdInfo := range fdInfos {
+		fd, err := strconv.Atoi(fdInfo.Name())
+		if err != nil {
+			return err
+		}
+
+		if fd < 3 {
+			continue
+		}
+
+		realPath, err := os.Readlink(filepath.Join(procFDDir, fdInfo.Name()))
+		if err != nil {
+			return fmt.Errorf("failed to readlink: %w", err)
+		}
+
+		if realPath == execFIFO {
+			return nil
+		}
+	}
+	return fmt.Errorf("process %v maybe not valid runc-init", pid)
 }

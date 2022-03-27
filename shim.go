@@ -1,19 +1,3 @@
-/*
-   Copyright The containerd Authors.
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
-*/
-
 package embedshim
 
 import (
@@ -79,6 +63,17 @@ func (es *embedShim) Create(ctx context.Context, opts runtime.CreateOpts) (_ run
 	}
 
 	if err := p.Create(ctx); err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		if retErr != nil {
+			// TODO(fuweid): use defer context like CRI plugin
+			p.Delete(ctx)
+		}
+	}()
+
+	if err := es.tm.monitor.traceInitProcess(p); err != nil {
 		return nil, err
 	}
 	es.init = p
@@ -194,10 +189,6 @@ func (es *embedShim) State(ctx context.Context) (runtime.State, error) {
 		status = runtime.RunningStatus
 	case "stopped":
 		status = runtime.StoppedStatus
-	case "paused":
-		status = runtime.PausedStatus
-	case "pausing":
-		status = runtime.PausingStatus
 	}
 	return runtime.State{
 		Pid:        uint32(es.init.pid),
@@ -222,9 +213,7 @@ func (es *embedShim) Delete(ctx context.Context) (*runtime.Exit, error) {
 	}
 
 	// TODO: reconstruct the cleanup-resource
-	tid, _ := es.tm.monitor.idr.getID(es.b.Namespace, es.b.ID)
-	es.tm.monitor.idr.releaseID(es.b.Namespace, es.b.ID)
-	es.tm.monitor.store.DelExitedTask(tid)
+	es.tm.monitor.store.DelExitedTask(es.init.traceEventID)
 	es.tm.Delete(ctx, es.init.ID())
 	return &runtime.Exit{
 		Pid:       uint32(es.init.pid),

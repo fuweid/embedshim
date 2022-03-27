@@ -1,45 +1,34 @@
 package embedshim
 
 import (
-	"context"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 
-	"github.com/cilium/ebpf"
-	"github.com/containerd/containerd/namespaces"
 	shimebpf "github.com/fuweid/embedshim/pkg/ebpf"
 	"github.com/fuweid/embedshim/pkg/pidfd"
+
+	"github.com/cilium/ebpf"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
 )
 
-type callbackFn func(*shimebpf.TaskExitStatus) error
+var (
+	// unexpectedExitCode is used when failed to get correct exit code.
+	unexpectedExitCode = 128
+)
 
 type monitor struct {
 	sync.Mutex
 
-	idr     *idAllocator
-	epoller *pidfd.Epoller
-	store   *shimebpf.SchedProcessExitStore
+	pidPoller *pidfd.Epoller
+	store     *shimebpf.SchedProcessExitStore
 }
 
 func newMonitor(stateDir string) (_ *monitor, retErr error) {
-	idr, err := newIDAllocator(stateDir)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if retErr != nil {
-			idr.close()
-		}
-	}()
-
 	epoller, err := pidfd.NewEpoller()
 	if err != nil {
 		return nil, err
@@ -56,33 +45,24 @@ func newMonitor(stateDir string) (_ *monitor, retErr error) {
 	}
 
 	m := &monitor{
-		idr:     idr,
-		epoller: epoller,
-		store:   store,
+		pidPoller: epoller,
+		store:     store,
 	}
 
 	// TODO: check the return
-	go m.epoller.Run()
+	go m.pidPoller.Run()
 	return m, nil
 }
 
-func (m *monitor) subscribe(ns string, cid string, pid uint32, cb callbackFn) (retErr error) {
+// traceInitProcess checks init process is alive and starts to trace it's exit
+// event by exitsnoop bpf tracepoint.
+func (m *monitor) traceInitProcess(init *initProcess) (retErr error) {
 	m.Lock()
 	defer m.Unlock()
 
-	tid, err := m.idr.nextID(ns, cid)
+	fd, err := pidfd.Open(uint32(init.Pid()), 0)
 	if err != nil {
-		return fmt.Errorf("failed to allocate ID for container %s in namespace %s: %w", cid, ns, err)
-	}
-	defer func() {
-		if retErr != nil {
-			m.idr.releaseID(ns, cid)
-		}
-	}()
-
-	fd, err := pidfd.Open(pid, 0)
-	if err != nil {
-		return fmt.Errorf("failed to open pidfd on %v for container %s in namespace %s: %w", pid, cid, ns, err)
+		return fmt.Errorf("failed to open pidfd for %s: %w", init, err)
 	}
 	defer func() {
 		if retErr != nil {
@@ -90,101 +70,134 @@ func (m *monitor) subscribe(ns string, cid string, pid uint32, cb callbackFn) (r
 		}
 	}()
 
-	if err := checkRuncInitAlive(ns, cid, pid); err != nil {
+	// NOTE: The pid might be reused before pidfd.Open(like oom-killer or
+	// manually kill), so that we need to check the runc-init's exec.fifo
+	// file descriptor which is the "identity" of runc-init. :)
+	//
+	// Why we don't use runc-state commandline?
+	//
+	// The runc-state command only checks /proc/$pid/status's starttime,
+	// which is not reliable. And then it only checks exec.fifo exist in
+	// disk, but the runc-init has been killed. So we can't just use it.
+	if err := checkRuncInitAlive(init); err != nil {
 		return err
 	}
 
-	nsInfo, err := getPidnsInfo(pid)
+	nsInfo, err := getPidnsInfo(uint32(init.Pid()))
 	if err != nil {
 		return fmt.Errorf("failed to get pidns info: %w", err)
 	}
 
-	if err := m.store.InsertRunningTask(pid, &shimebpf.TaskInfo{
-		ID:        tid,
+	if err := m.store.InsertRunningTask(uint32(init.Pid()), &shimebpf.TaskInfo{
+		ID:        init.traceEventID,
 		PidnsInfo: nsInfo,
 	}); err != nil {
-		return fmt.Errorf("failed to insert taskinfo for container %s in namespace %s: %w", cid, ns, err)
+		return fmt.Errorf("failed to insert taskinfo for %s: %w", init, err)
 	}
 	defer func() {
 		if retErr != nil {
-			m.store.DelRunningTask(pid)
+			m.store.DelRunningTask(uint32(init.Pid()))
+			m.store.DelExitedTask(init.traceEventID)
 		}
 	}()
 
+	// Before trace it, the init-process might be killed and the exitsnoop
+	// tracepoint will not work, we need to check it alive again by pidfd.
 	if err := fd.SendSignal(0, 0); err != nil {
 		return err
 	}
 
-	if err := m.epoller.Add(fd, func() error {
-		status, err := m.store.GetExitedTask(tid)
+	if err := m.pidPoller.Add(fd, func() error {
+		// TODO(fuweid): do we need to the pid value in event?
+		status, err := m.store.GetExitedTask(init.traceEventID)
 		if err != nil {
+			init.SetExited(unexpectedExitCode)
 			return fmt.Errorf("failed to get exited status: %w", err)
 		}
 
-		if status.Pid != pid {
-			return fmt.Errorf("expected %v but got pid %v", pid, status.Pid)
-		}
-		return cb(status)
+		init.SetExited(int(status.ExitCode))
+		return nil
 	}); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (m *monitor) resubscribe(ctx context.Context, init *initProcess) (retErr error) {
-	ns, err := namespaces.NamespaceRequired(ctx)
-	if err != nil {
-		return err
-	}
+// repollingInitProcess is used to watch pidfd event after containerd restarts.
+func (m *monitor) repollingInitProcess(init *initProcess) (retErr error) {
+	var (
+		eventID = init.traceEventID
 
-	tid, err := m.idr.getID(ns, init.ID())
-	if err != nil {
-		return err
-	}
+		exitedStatus *shimebpf.TaskExitStatus
+		taskInfo     *shimebpf.TaskInfo
 
-	err = setExitedStatus(tid, m.store, init)
+		fd      pidfd.FD
+		closeFD bool
+		err     error
+	)
+
+	// fast path: check exit event from exitsnoop
+	exitedStatus, err = m.store.GetExitedTask(eventID)
 	if err == nil {
+		init.SetExited(int(exitedStatus.ExitCode))
 		return nil
 	}
 	if !errors.Is(err, ebpf.ErrKeyNotExist) {
 		return err
-
 	}
 
-	fd, err := pidfd.Open(uint32(init.Pid()), 0)
+	fd, err = pidfd.Open(uint32(init.Pid()), 0)
 	if err != nil {
 		if !errors.Is(err, syscall.ESRCH) {
 			return err
 		}
-		return setExitedStatus(tid, m.store, init)
+		goto set_exitedstatus
 	}
+	closeFD = true
 	defer func() {
-		if retErr != nil && fd != 0 {
+		if retErr != nil && closeFD {
 			unix.Close(int(fd))
 		}
 	}()
 
-	info, err := m.store.GetRunningTask(uint32(init.Pid()))
+	taskInfo, err = m.store.GetRunningTask(uint32(init.Pid()))
 	if err != nil {
 		if !errors.Is(err, ebpf.ErrKeyNotExist) {
 			return err
 		}
-		return setExitedStatus(tid, m.store, init)
+		goto set_exitedstatus
 	}
 
-	if info != nil && info.ID == tid {
+	// Just in case, the pid has been reused by other init process
+	if taskInfo != nil && taskInfo.ID == eventID {
+		// TODO(fuweid): Ugly! Need interface here.
 		init.initState.(*createdState).transition("running")
-		if err := m.epoller.Add(fd, func() error {
-			return setExitedStatus(tid, m.store, init)
-		}); err != nil {
-			return err
-		}
-		return nil
+
+		return m.pidPoller.Add(fd, func() error {
+			// TODO(fuweid): do we need to the pid value in event?
+			exitedStatus, err = m.store.GetExitedTask(init.traceEventID)
+			if err != nil {
+				init.SetExited(unexpectedExitCode)
+				return fmt.Errorf("failed to get exited status: %w", err)
+			}
+
+			init.SetExited(int(exitedStatus.ExitCode))
+			return nil
+		})
 	}
 
 	unix.Close(int(fd))
-	fd = 0
-	return setExitedStatus(tid, m.store, init)
+	closeFD = false
+
+set_exitedstatus:
+	exitedStatus, err = m.store.GetExitedTask(eventID)
+	if err != nil {
+		init.SetExited(unexpectedExitCode)
+		return err
+	}
+
+	init.SetExited(int(exitedStatus.ExitCode))
+	return nil
 }
 
 func getPidnsInfo(pid uint32) (shimebpf.PidnsInfo, error) {
@@ -197,58 +210,4 @@ func getPidnsInfo(pid uint32) (shimebpf.PidnsInfo, error) {
 		Dev: (f.Sys().(*syscall.Stat_t)).Dev,
 		Ino: (f.Sys().(*syscall.Stat_t)).Ino,
 	}, nil
-
-}
-
-// TODO: check with runc-root dir
-func checkRuncInitAlive(ns, cid string, pid uint32) error {
-	found := false
-
-	fdDir := filepath.Join("/proc", strconv.Itoa(int(pid)), "fd")
-	err0 := filepath.Walk(fdDir, func(path string, info fs.FileInfo, _ error) error {
-		if found {
-			return nil
-		}
-
-		if info.IsDir() {
-			if path != fdDir {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		fd, err := strconv.Atoi(info.Name())
-		if err != nil || fd < 3 {
-			return err
-		}
-
-		realPath, err := os.Readlink(path)
-		if err != nil {
-			return fmt.Errorf("failed to readlink fd %v: %w", fd, err)
-		}
-
-		if strings.HasSuffix(realPath, filepath.Join(ns, cid, "exec.fifo")) {
-			found = true
-			return nil
-		}
-		return nil
-	})
-	if err0 != nil {
-		return fmt.Errorf("failed to check runc-init process is alive: %w", err0)
-	}
-
-	if !found {
-		return fmt.Errorf("pid %v maybe not valid runc-init", pid)
-	}
-	return nil
-}
-
-func setExitedStatus(tid uint64, store *shimebpf.SchedProcessExitStore, init *initProcess) error {
-	exitedStatus, err := store.GetExitedTask(tid)
-	if err != nil {
-		return err
-	}
-
-	init.SetExited(int(exitedStatus.ExitCode))
-	return nil
 }

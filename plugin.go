@@ -40,6 +40,8 @@ import (
 
 var (
 	pluginID = fmt.Sprintf("%s.%s", plugin.RuntimePlugin, "embed")
+
+	traceEventIDDBName = "trace_event_id.db"
 )
 
 type Config struct{}
@@ -95,12 +97,13 @@ func New(ic *plugin.InitContext) (interface{}, error) {
 type TaskManager struct {
 	rootDir  string
 	stateDir string
+	config   *Config
 
 	tasks      *runtime.TaskList
 	containers containers.Store
 	events     *exchange.Exchange
 
-	config  *Config
+	idAlloc *idAllocator
 	monitor *monitor
 }
 
@@ -135,11 +138,16 @@ func (tm *TaskManager) Create(ctx context.Context, id string, opts runtime.Creat
 		}
 	}
 
-	// TODO(fuweid): apply eventID and options.Options
+	traceEventID, err := tm.idAlloc.nextID()
+	if err != nil {
+		return nil, err
+	}
+
 	bundle, err := pkgbundle.NewBundle(tm.rootDir, tm.stateDir, ns, id,
 		withBundleApplyInitOCISpec(opts.Spec),
 		withBundleApplyInitOptions(initOpts),
 		withBundleApplyInitStdio(opts.IO),
+		withBundleApplyInitTraceEventID(traceEventID),
 	)
 	if err != nil {
 		return nil, err
@@ -155,25 +163,6 @@ func (tm *TaskManager) Create(ctx context.Context, id string, opts runtime.Creat
 	if err != nil {
 		return nil, fmt.Errorf("failed to create init process: %w", err)
 	}
-
-	defer func() {
-		if retErr != nil {
-			// TODO: use timeout context
-			es.Delete(context.TODO())
-		}
-	}()
-
-	err = tm.monitor.subscribe(
-		ns, id, t.PID(),
-		func(exited *shimebpf.TaskExitStatus) error {
-			es.init.SetExited(int(exited.ExitCode))
-			return nil
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	tm.tasks.Add(ctx, t)
 	return t, nil
 }
@@ -200,6 +189,14 @@ func (tm *TaskManager) init() error {
 		return err
 	}
 
+	tm.idAlloc, err = newIDAllocator(tm.stateDir, traceEventIDDBName)
+	if err != nil {
+		return err
+	}
+
 	tm.monitor, err = newMonitor(tm.stateDir)
-	return err
+	if err != nil {
+		return err
+	}
+	return nil
 }
