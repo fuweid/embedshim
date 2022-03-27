@@ -19,6 +19,8 @@ low overhead.
 
 ![embedshim-overview](docs/images/embedshim-overview.svg)
 
+[![asciicast](https://asciinema.org/a/480970.svg)](https://asciinema.org/a/480970)
+
 ## Build/Install
 
 The embedshim needs to compile bpf with clang/llvm. So install clang/llvm as first.
