@@ -102,6 +102,17 @@ func NewBundle(root, state, ns, id string, opts ...ApplyOpts) (_ *Bundle, retErr
 	return b, nil
 }
 
+// Rootfs returns rootfs path.
+func (b *Bundle) Rootfs() string {
+	return filepath.Join(b.Path, "rootfs")
+}
+
+// IsValid returns nil if the last-created workdir is there.
+func (b *Bundle) IsValid() error {
+	_, err := os.Stat(filepath.Join(b.Path, "work"))
+	return err
+}
+
 // Delete a bundle atomically
 func (b *Bundle) Delete() error {
 	rootfs := filepath.Join(b.Path, "rootfs")
