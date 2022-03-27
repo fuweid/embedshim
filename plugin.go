@@ -162,12 +162,12 @@ func (manager *TaskManager) Tasks(ctx context.Context, all bool) ([]runtime.Task
 }
 
 func (manager *TaskManager) init() (retErr error) {
-	err := exitsnoop.EnsureRunning(manager.stateDir)
+	err := exitsnoop.EnsureRunning(manager.rootDir)
 	if err != nil {
 		return err
 	}
 
-	manager.idAlloc, err = newIDAllocator(manager.stateDir, traceEventIDDBName)
+	manager.idAlloc, err = newIDAllocator(manager.rootDir, traceEventIDDBName)
 	if err != nil {
 		return err
 	}
@@ -177,7 +177,7 @@ func (manager *TaskManager) init() (retErr error) {
 		}
 	}()
 
-	manager.monitor, err = newMonitor(manager.stateDir)
+	manager.monitor, err = newMonitor(manager.rootDir)
 	if err != nil {
 		return err
 	}

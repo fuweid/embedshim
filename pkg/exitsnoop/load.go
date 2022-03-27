@@ -26,7 +26,7 @@ var (
 
 	bpfProgName        = "handle_sched_process_exit"
 	bpfMapTracingTasks = "tracing_tasks"
-	bpfMapExitedEvents = "exited_tasks"
+	bpfMapExitedEvents = "exited_events"
 )
 
 func EnsureRunning(bpffsRoot string) error {
