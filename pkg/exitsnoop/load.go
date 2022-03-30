@@ -29,6 +29,55 @@ var (
 	bpfMapExitedEvents = "exited_events"
 )
 
+// NewStoreFromAttach loads exitsnoop and attaches to sched_process_exit and
+// returns the Store as interface.
+//
+// TODO(fuweid):
+//
+// NewStoreFromAttach only opens but not pinned in bpffs, which has common
+// functionality with EnsureRunning. I think we should use options to merge
+// two function in the future.
+//
+// FIXME(fuweid):
+//
+// How to close the link after close the store?
+func NewStoreFromAttach() (_ *Store, retErr error) {
+	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(progByteCode))
+	if err != nil {
+		return nil, err
+	}
+
+	collection, err := ebpf.NewCollection(spec)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		for _, p := range collection.Programs {
+			p.Close()
+		}
+
+		if retErr != nil {
+			for _, m := range collection.Maps {
+				m.Close()
+			}
+		}
+	}()
+
+	_, err = link.AttachRawTracepoint(link.RawTracepointOptions{
+		Name:    "sched_process_exit",
+		Program: collection.Programs[bpfProgName],
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &Store{
+		tracingTasks: collection.Maps[bpfMapTracingTasks],
+		exitedEvents: collection.Maps[bpfMapExitedEvents],
+	}, nil
+}
+
+// EnsureRunning makes sure that the exitsnoop has been pinned in BPF filesystem.
 func EnsureRunning(bpffsRoot string) error {
 	rootDir := filepath.Join(bpffsRoot, pinnedDir)
 
