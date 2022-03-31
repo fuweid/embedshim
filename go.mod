@@ -15,5 +15,5 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.8.1
 	go.etcd.io/bbolt v1.3.5
-	golang.org/x/sys v0.0.0-20220319134239-a9b59b0215f8
+	golang.org/x/sys v0.0.0-20220330033206-e17cdc41300f
 )
