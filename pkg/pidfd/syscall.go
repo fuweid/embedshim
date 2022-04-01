@@ -73,3 +73,12 @@ func (fd FD) Waitid(info *Siginfo, options int, rusage *Rusage) error {
 	}
 	return nil
 }
+
+// GetFd obtain a duplicate of another process's file descriptor.
+func (fd FD) GetFd(targetFD int, flags int) (int, error) {
+	// From https://man7.org/linux/man-pages/man2/pidfd_getfd.2.html
+	//
+	// The flags argument is reserved for future use.  Currently, it
+	// must be specified as 0.
+	return unix.PidfdGetfd(int(fd), targetFD, flags)
+}
