@@ -32,6 +32,7 @@ import (
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/pkg/stdio"
+	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	"github.com/containerd/fifo"
 	"github.com/containerd/go-runc"
@@ -41,6 +42,8 @@ import (
 )
 
 type initProcess struct {
+	parent *shim
+
 	initState initState
 	bundle    *pkgbundle.Bundle
 
@@ -65,7 +68,7 @@ type initProcess struct {
 	pid    int
 }
 
-func newInitProcess(bundle *pkgbundle.Bundle) (*initProcess, error) {
+func newInitProcess(bundle *pkgbundle.Bundle) (_ *initProcess, retErr error) {
 	opts, err := readInitOptions(bundle)
 	if err != nil {
 		return nil, err
@@ -80,6 +83,16 @@ func newInitProcess(bundle *pkgbundle.Bundle) (*initProcess, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	platform, err := NewPlatform()
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if retErr != nil {
+			platform.Close()
+		}
+	}()
 
 	runtime := newRuncRuntime(
 		opts.Root,                          // for working dir
@@ -102,6 +115,7 @@ func newInitProcess(bundle *pkgbundle.Bundle) (*initProcess, error) {
 			Terminal: initIO.Terminal,
 		},
 		status:    0,
+		platform:  platform,
 		waitBlock: make(chan struct{}),
 	}
 	p.initState = &createdState{p: p}
@@ -113,7 +127,7 @@ func (p *initProcess) Create(ctx context.Context) (retErr error) {
 		err     error
 		socket  *runc.Socket
 		pio     *processIO
-		pidFile = newPidFile(p.bundle)
+		pidFile = newInitPidFile(p.bundle)
 
 		ioUID = int(p.options.IoUid)
 		ioGID = int(p.options.IoGid)
@@ -123,17 +137,6 @@ func (p *initProcess) Create(ctx context.Context) (retErr error) {
 	//
 	// Terminal console poller should be shared in plugin Level.
 	if p.stdio.Terminal {
-		p.platform, err = NewPlatform()
-		if err != nil {
-			return nil
-		}
-
-		defer func() {
-			if retErr != nil {
-				p.platform.Close()
-			}
-		}()
-
 		if socket, err = runc.NewTempConsoleSocket(); err != nil {
 			return fmt.Errorf("failed to create OCI runtime console socket: %w", err)
 		}
@@ -398,8 +401,39 @@ func (p *initProcess) Runtime() *runc.Runc {
 }
 
 // Exec returns a new child process
-func (p *initProcess) Exec(ctx context.Context, path string, r *ExecConfig) (Process, error) {
-	return nil, fmt.Errorf("exec not implemented yet")
+func (p *initProcess) Exec(ctx context.Context, execID string, opts runtime.ExecOpts) (runtime.Process, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.initState.Exec(ctx, execID, opts)
+}
+
+func (p *initProcess) exec(ctx context.Context, execID string, opts runtime.ExecOpts) (runtime.Process, error) {
+	traceID := traceIDFromContext(ctx)
+
+	// process exec request
+	var spec specs.Process
+	if err := json.Unmarshal(opts.Spec.Value, &spec); err != nil {
+		return nil, err
+	}
+
+	spec.Terminal = opts.IO.Terminal
+	e := &execProcess{
+		parent:       p,
+		id:           execID,
+		traceEventID: traceID,
+
+		spec: spec,
+		stdio: stdio.Stdio{
+			Stdin:    opts.IO.Stdin,
+			Stdout:   opts.IO.Stdout,
+			Stderr:   opts.IO.Stderr,
+			Terminal: opts.IO.Terminal,
+		},
+		waitBlock: make(chan struct{}),
+	}
+	e.execState = &execCreatedState{p: e}
+	return e, nil
 }
 
 // Checkpoint the init process

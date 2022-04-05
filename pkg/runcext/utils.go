@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -11,6 +12,8 @@ import (
 	"github.com/containerd/go-runc"
 	"golang.org/x/sys/unix"
 )
+
+var RuntimeExtCommand = "embedshim-runcext"
 
 func NewSocketPair(name string) (*os.File, *os.File, error) {
 	fds, err := unix.Socketpair(unix.AF_LOCAL, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
@@ -41,13 +44,19 @@ func (p *PidFile) Read() (int, error) {
 }
 
 // RuntimeCommand is based on github.com/containerd/go-runc@v1.0.0/command_linux.go
-func RuntimeCommand(ctx context.Context, r *runc.Runc, args ...string) *exec.Cmd {
+func RuntimeCommand(ctx context.Context, ext bool, r *runc.Runc, args ...string) *exec.Cmd {
 	command := r.Command
 	if command == "" {
 		command = runc.DefaultCommand
 	}
 
-	cmd := exec.CommandContext(ctx, command, append(runtimeArgs(r), args...)...)
+	gArgs := runtimeArgs(r)
+	if ext {
+		gArgs = append(gArgs, "--command", command)
+		command = RuntimeExtCommand
+	}
+
+	cmd := exec.CommandContext(ctx, command, append(gArgs, args...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: r.Setpgid,
 	}
@@ -58,6 +67,26 @@ func RuntimeCommand(ctx context.Context, r *runc.Runc, args ...string) *exec.Cmd
 		cmd.SysProcAttr.Pdeathsig = r.PdeathSignal
 	}
 	return cmd
+}
+
+// RuncExecOptsArgs is based on
+func RuncExecOptsArgs(opts *runc.ExecOpts) (out []string, err error) {
+	if opts.ConsoleSocket != nil {
+		out = append(out, "--console-socket", opts.ConsoleSocket.Path())
+	}
+
+	if opts.Detach {
+		out = append(out, "--detach")
+	}
+
+	if opts.PidFile != "" {
+		abs, err := filepath.Abs(opts.PidFile)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, "--pid-file", abs)
+	}
+	return out, nil
 }
 
 func runtimeArgs(r *runc.Runc) (out []string) {

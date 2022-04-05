@@ -70,6 +70,15 @@ func (store *Store) DeleteTracingTask(pid uint32) error {
 	return store.tracingTasks.Delete(pid)
 }
 
+func (store *Store) ExitedEventFromWaitStatus(traceEventID uint64, pid uint32, status uint32) error {
+	info := ExitStatus{
+		Pid:      pid,
+		ExitCode: int32(status),
+	}
+
+	return store.exitedEvents.Update(traceEventID, &info, ebpf.UpdateNoExist)
+}
+
 func (store *Store) GetExitedEvent(traceEventID uint64) (*ExitStatus, error) {
 	info := &ExitStatus{}
 

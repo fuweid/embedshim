@@ -22,6 +22,7 @@ import (
 
 	"github.com/containerd/console"
 	"github.com/containerd/containerd/errdefs"
+	"github.com/containerd/containerd/runtime"
 	google_protobuf "github.com/gogo/protobuf/types"
 )
 
@@ -64,7 +65,7 @@ func (s *deletedState) SetExited(status int) {
 	// no op
 }
 
-func (s *deletedState) Exec(ctx context.Context, path string, r *ExecConfig) (Process, error) {
+func (s *deletedState) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
 	return nil, fmt.Errorf("cannot exec in a deleted state")
 }
 

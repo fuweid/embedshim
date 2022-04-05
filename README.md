@@ -61,7 +61,6 @@ io.containerd.runtime.v1        embed                    linux/amd64    ok
 The embedshim supports to run container in headless or with input.
 But it still works in progress, do not use in production.
 
-* [ ] Support Exec
 * [ ] Support Pause/Resume
 * [ ] Metrics Support
 * [ ] Task Event(Create/Start/Exit/Delete/OOM) support

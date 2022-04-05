@@ -133,7 +133,7 @@ func runExec(clicontext *cli.Context) (retErr error) {
 			return fmt.Errorf("failed to get exec arguments: %w", err)
 		}
 
-		execCmd := runcext.RuntimeCommand(ctx, r, execArgs...)
+		execCmd := runcext.RuntimeCommand(ctx, false, r, execArgs...)
 
 		// NOTE: Just by-pass the standard IO
 		execCmd.Stdin = os.Stdin

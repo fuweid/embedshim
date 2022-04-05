@@ -10,6 +10,7 @@ import (
 
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/namespaces"
+	"github.com/containerd/containerd/runtime"
 )
 
 func (manager *TaskManager) reloadExistingTasks(ctx context.Context) error {
@@ -111,11 +112,16 @@ func (manager *TaskManager) loadShim(ctx context.Context, bundle *pkgbundle.Bund
 }
 
 func renewShim(manager *TaskManager, init *initProcess) *shim {
-	return &shim{
+	s := &shim{
 		manager: manager,
 		bundle:  init.bundle,
 		init:    init,
+
+		execProcesses:   make(map[string]runtime.Process),
+		reservedExecIDs: make(map[string]struct{}),
 	}
+	init.parent = s
+	return s
 }
 
 func renewInitProcess(bundle *pkgbundle.Bundle) (*initProcess, error) {
@@ -124,7 +130,7 @@ func renewInitProcess(bundle *pkgbundle.Bundle) (*initProcess, error) {
 		return nil, err
 	}
 
-	pid, err := newPidFile(bundle).Read()
+	pid, err := newInitPidFile(bundle).Read()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read container pidfile: %w", err)
 	}
