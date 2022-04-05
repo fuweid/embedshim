@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
@@ -23,8 +24,12 @@ var deferCleanupTimeout = 30 * time.Second
 type shim struct {
 	manager *TaskManager
 
+	mu     sync.Mutex
 	bundle *pkgbundle.Bundle
 	init   *initProcess
+
+	execProcesses   map[string]runtime.Process
+	reservedExecIDs map[string]struct{}
 }
 
 func newShim(manager *TaskManager, bundle *pkgbundle.Bundle) (*shim, error) {
@@ -33,11 +38,15 @@ func newShim(manager *TaskManager, bundle *pkgbundle.Bundle) (*shim, error) {
 		return nil, err
 	}
 
-	return &shim{
-		manager: manager,
-		bundle:  bundle,
-		init:    init,
-	}, nil
+	s := &shim{
+		manager:         manager,
+		bundle:          bundle,
+		init:            init,
+		execProcesses:   make(map[string]runtime.Process),
+		reservedExecIDs: make(map[string]struct{}),
+	}
+	init.parent = s
+	return s, nil
 }
 
 func (s *shim) Create(ctx context.Context, opts runtime.CreateOpts) (_ runtime.Task, retErr error) {
@@ -112,8 +121,26 @@ func (s *shim) Kill(ctx context.Context, signal uint32, all bool) error {
 	return s.init.Kill(ctx, signal, all)
 }
 
-func (s *shim) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
-	return nil, fmt.Errorf("exec not implemented yet")
+func (s *shim) Exec(ctx context.Context, execID string, opts runtime.ExecOpts) (runtime.Process, error) {
+	traceID, err := s.manager.nextTraceEventID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate trace ID for exec %s: %w", execID, err)
+	}
+
+	ctx = withTraceID(ctx, traceID)
+
+	ok, cleanup := s.reserveExecID(execID)
+	if !ok {
+		return nil, fmt.Errorf("id %s: %w", execID, errdefs.ErrAlreadyExists)
+	}
+
+	process, err := s.init.Exec(ctx, execID, opts)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	s.addExecProcess(process)
+	return process, nil
 }
 
 func (s *shim) Pids(ctx context.Context) ([]runtime.ProcessInfo, error) {
@@ -168,14 +195,20 @@ func (s *shim) Stats(ctx context.Context) (*ptypes.Any, error) {
 }
 
 func (s *shim) Process(ctx context.Context, id string) (runtime.Process, error) {
-	if s.bundle.ID != id {
-		return nil, fmt.Errorf("exec %s: %w", id, errdefs.ErrNotFound)
+	if s.bundle.ID == id {
+		if _, err := s.init.Status(ctx); err != nil {
+			return nil, err
+		}
+		return s, nil
 	}
 
-	if _, err := s.init.Status(ctx); err != nil {
-		return nil, err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.execProcesses[id]
+	if !ok {
+		return nil, fmt.Errorf("exec %s: %w", id, errdefs.ErrNotFound)
 	}
-	return s, nil
+	return p, nil
 }
 
 func (s *shim) State(ctx context.Context) (runtime.State, error) {
@@ -223,6 +256,42 @@ func (s *shim) Delete(ctx context.Context) (*runtime.Exit, error) {
 		Status:    uint32(s.init.ExitStatus()),
 		Timestamp: s.init.ExitedAt(),
 	}, nil
+}
+
+func (s *shim) reserveExecID(id string) (bool, func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.execProcesses[id]; ok {
+		return false, nil
+	}
+
+	if _, ok := s.reservedExecIDs[id]; ok {
+		return false, nil
+	}
+
+	s.reservedExecIDs[id] = struct{}{}
+	return true, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.reservedExecIDs, id)
+	}
+}
+
+func (s *shim) addExecProcess(process runtime.Process) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.reservedExecIDs, process.ID())
+	s.execProcesses[process.ID()] = process
+}
+
+func (s *shim) deleteExecProcess(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.reservedExecIDs, id)
+	delete(s.execProcesses, id)
 }
 
 func deferContext() (context.Context, context.CancelFunc) {

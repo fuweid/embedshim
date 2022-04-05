@@ -25,7 +25,8 @@ type monitor struct {
 	sync.Mutex
 
 	pidPoller *pidfd.Epoller
-	store     *exitsnoop.Store
+	initStore *exitsnoop.Store
+	execStore *exitsnoop.Store
 }
 
 func newMonitor(stateDir string) (_ *monitor, retErr error) {
@@ -39,14 +40,25 @@ func newMonitor(stateDir string) (_ *monitor, retErr error) {
 		}
 	}()
 
-	store, err := exitsnoop.NewStore(stateDir)
+	initStore, err := exitsnoop.NewStore(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if retErr != nil {
+			initStore.Close()
+		}
+	}()
+
+	execStore, err := exitsnoop.NewStoreFromAttach()
 	if err != nil {
 		return nil, err
 	}
 
 	m := &monitor{
 		pidPoller: epoller,
-		store:     store,
+		initStore: initStore,
+		execStore: execStore,
 	}
 
 	// TODO: check the return
@@ -88,7 +100,7 @@ func (m *monitor) traceInitProcess(init *initProcess) (retErr error) {
 		return fmt.Errorf("failed to get pidns info: %w", err)
 	}
 
-	if err := m.store.Trace(uint32(init.Pid()), &exitsnoop.TaskInfo{
+	if err := m.initStore.Trace(uint32(init.Pid()), &exitsnoop.TaskInfo{
 		TraceID:   init.traceEventID,
 		PidnsInfo: nsInfo,
 	}); err != nil {
@@ -96,8 +108,8 @@ func (m *monitor) traceInitProcess(init *initProcess) (retErr error) {
 	}
 	defer func() {
 		if retErr != nil {
-			m.store.DeleteTracingTask(uint32(init.Pid()))
-			m.store.DeleteExitedEvent(init.traceEventID)
+			m.initStore.DeleteTracingTask(uint32(init.Pid()))
+			m.initStore.DeleteExitedEvent(init.traceEventID)
 		}
 	}()
 
@@ -108,8 +120,8 @@ func (m *monitor) traceInitProcess(init *initProcess) (retErr error) {
 	}
 
 	if err := m.pidPoller.Add(fd, func() error {
-		// TODO(fuweid): do we need to the pid value in event?
-		status, err := m.store.GetExitedEvent(init.traceEventID)
+		// TODO(fuweid): do we need to check the pid value in event?
+		status, err := m.initStore.GetExitedEvent(init.traceEventID)
 		if err != nil {
 			init.SetExited(unexpectedExitCode)
 			return fmt.Errorf("failed to get exited status: %w", err)
@@ -137,7 +149,7 @@ func (m *monitor) repollingInitProcess(init *initProcess) (retErr error) {
 	)
 
 	// fast path: check exit event from exitsnoop
-	exitedStatus, err = m.store.GetExitedEvent(eventID)
+	exitedStatus, err = m.initStore.GetExitedEvent(eventID)
 	if err == nil {
 		init.SetExited(int(exitedStatus.ExitCode))
 		return nil
@@ -160,7 +172,7 @@ func (m *monitor) repollingInitProcess(init *initProcess) (retErr error) {
 		}
 	}()
 
-	taskInfo, err = m.store.GetTracingTask(uint32(init.Pid()))
+	taskInfo, err = m.initStore.GetTracingTask(uint32(init.Pid()))
 	if err != nil {
 		if !errors.Is(err, ebpf.ErrKeyNotExist) {
 			return err
@@ -174,8 +186,8 @@ func (m *monitor) repollingInitProcess(init *initProcess) (retErr error) {
 		init.initState.(*createdState).transition("running")
 
 		return m.pidPoller.Add(fd, func() error {
-			// TODO(fuweid): do we need to the pid value in event?
-			exitedStatus, err = m.store.GetExitedEvent(init.traceEventID)
+			// TODO(fuweid): do we need to check the pid value in event?
+			exitedStatus, err = m.initStore.GetExitedEvent(init.traceEventID)
 			if err != nil {
 				init.SetExited(unexpectedExitCode)
 				return fmt.Errorf("failed to get exited status: %w", err)
@@ -190,7 +202,7 @@ func (m *monitor) repollingInitProcess(init *initProcess) (retErr error) {
 	closeFD = false
 
 set_exitedstatus:
-	exitedStatus, err = m.store.GetExitedEvent(eventID)
+	exitedStatus, err = m.initStore.GetExitedEvent(eventID)
 	if err != nil {
 		init.SetExited(unexpectedExitCode)
 		return err

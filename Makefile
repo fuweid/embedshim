@@ -2,7 +2,7 @@
 DESTDIR ?= /usr/local
 
 # command name
-COMMANDS=embedshim-containerd
+COMMANDS=embedshim-containerd embedshim-runcext
 
 # binaries
 BINARIES=$(addprefix bin/,$(COMMANDS))

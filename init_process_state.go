@@ -20,20 +20,11 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/containerd/containerd/runtime"
 	google_protobuf "github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
-
-// ExecConfig holds exec creation configuration
-type ExecConfig struct {
-	ID       string
-	Terminal bool
-	Stdin    string
-	Stdout   string
-	Stderr   string
-	Spec     *google_protobuf.Any
-}
 
 // CheckpointConfig holds task checkpoint configuration
 type CheckpointConfig struct {
@@ -54,7 +45,7 @@ type initState interface {
 	Resume(context.Context) error
 	Update(context.Context, *google_protobuf.Any) error
 	Checkpoint(context.Context, *CheckpointConfig) error
-	Exec(context.Context, string, *ExecConfig) (Process, error)
+	Exec(context.Context, string, runtime.ExecOpts) (runtime.Process, error)
 	Kill(context.Context, uint32, bool) error
 	SetExited(int)
 	Status(context.Context) (string, error)
@@ -120,8 +111,8 @@ func (s *createdState) SetExited(status int) {
 	}
 }
 
-func (s *createdState) Exec(ctx context.Context, path string, r *ExecConfig) (Process, error) {
-	return nil, fmt.Errorf("exec not implemented yet")
+func (s *createdState) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
+	return s.p.exec(ctx, id, opts)
 }
 
 func (s *createdState) Status(ctx context.Context) (string, error) {
@@ -180,8 +171,8 @@ func (s *runningState) SetExited(status int) {
 	}
 }
 
-func (s *runningState) Exec(ctx context.Context, path string, r *ExecConfig) (Process, error) {
-	return nil, fmt.Errorf("exec not implemented yet")
+func (s *runningState) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
+	return s.p.exec(ctx, id, opts)
 }
 
 func (s *runningState) Status(ctx context.Context) (string, error) {
@@ -244,7 +235,7 @@ func (s *pausedState) SetExited(status int) {
 	}
 }
 
-func (s *pausedState) Exec(ctx context.Context, path string, r *ExecConfig) (Process, error) {
+func (s *pausedState) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
 	return nil, fmt.Errorf("cannot exec in a paused state")
 }
 
@@ -301,7 +292,7 @@ func (s *stoppedState) SetExited(status int) {
 	// no op
 }
 
-func (s *stoppedState) Exec(ctx context.Context, path string, r *ExecConfig) (Process, error) {
+func (s *stoppedState) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
 	return nil, fmt.Errorf("cannot exec in a stopped state")
 }
 
@@ -316,8 +307,6 @@ func stateName(v interface{}) string {
 		return "running"
 	case *createdState:
 		return "created"
-	case *pausedState:
-		return "paused"
 	case *deletedState:
 		return "deleted"
 	case *stoppedState:

@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 
 	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
+	"github.com/fuweid/embedshim/pkg/runcext"
 
 	"github.com/containerd/containerd/runtime"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
-	"github.com/containerd/go-runc"
 	"github.com/gogo/protobuf/types"
 )
 
@@ -39,22 +39,8 @@ var (
 	bundleInitPidFile = "init.pid"
 )
 
-func newPidFile(bundle *pkgbundle.Bundle) *pidFile {
-	return &pidFile{
-		path: filepath.Join(bundle.Path, bundleInitPidFile),
-	}
-}
-
-type pidFile struct {
-	path string
-}
-
-func (p *pidFile) Path() string {
-	return p.path
-}
-
-func (p *pidFile) Read() (int, error) {
-	return runc.ReadPidFile(p.path)
+func newInitPidFile(bundle *pkgbundle.Bundle) *runcext.PidFile {
+	return runcext.NewPidFile(filepath.Join(bundle.Path, bundleInitPidFile))
 }
 
 func readInitTraceEventID(b *pkgbundle.Bundle) (uint64, error) {

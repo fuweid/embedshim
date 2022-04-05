@@ -197,7 +197,7 @@ func (manager *TaskManager) repollingInitProcess(init *initProcess) error {
 }
 
 func (manager *TaskManager) cleanInitProcessTraceEvent(init *initProcess) error {
-	return manager.monitor.store.DeleteExitedEvent(init.traceEventID)
+	return manager.monitor.initStore.DeleteExitedEvent(init.traceEventID)
 }
 
 func initOptionsFromCreateOpts(createOpts runtime.CreateOpts) (*options.Options, error) {
@@ -218,4 +218,14 @@ func initOptionsFromCreateOpts(createOpts runtime.CreateOpts) (*options.Options,
 		}
 	}
 	return initOpts, nil
+}
+
+type ctxTraceIDKey struct{}
+
+func withTraceID(ctx context.Context, traceID uint64) context.Context {
+	return context.WithValue(ctx, ctxTraceIDKey{}, traceID)
+}
+
+func traceIDFromContext(ctx context.Context) uint64 {
+	return ctx.Value(ctxTraceIDKey{}).(uint64)
 }
