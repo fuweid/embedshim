@@ -287,7 +287,7 @@ func (p *initProcess) SetExited(status int) {
 
 func (p *initProcess) setExited(status int) {
 	p.exited = time.Now()
-	p.status = status
+	p.status = unix.WaitStatus(status).ExitStatus()
 	if p.platform != nil {
 		p.platform.ShutdownConsole(context.Background(), p.console)
 
