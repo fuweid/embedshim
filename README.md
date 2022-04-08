@@ -70,3 +70,8 @@ But it still works in progress, do not use in production.
 * raw tracepoint bpf >= kernel v4.18
 * CO-RE BTF vmlinux support >= kernel v5.4
 * pidfd polling >= kernel v5.3
+
+## License
+
+* The user space components are licensed under [the Apache License, Version 2.0](LICENSE).
+* The BPF code are under [the General Public License, Version 2.0](bpf/COPYING).
