@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/link"
 )
 
 // TaskInfo is used to trace the target task.
@@ -51,6 +52,10 @@ func NewStore(bpffsRoot string) (*Store, error) {
 type Store struct {
 	tracingTasks *ebpf.Map
 	exitedEvents *ebpf.Map
+
+	// NOTE: It is only used to prevent the memory-type prog from go runtime
+	// GC. For the persisted-type, the field is nil.
+	link link.Link
 }
 
 func (store *Store) Trace(pid uint32, taskInfo *TaskInfo) error {
@@ -95,6 +100,9 @@ func (store *Store) DeleteExitedEvent(traceEventID uint64) error {
 func (store *Store) Close() error {
 	store.tracingTasks.Close()
 	store.exitedEvents.Close()
+	if store.link != nil {
+		store.link.Close()
+	}
 	return nil
 }
 

@@ -37,10 +37,6 @@ var (
 // NewStoreFromAttach only opens but not pinned in bpffs, which has common
 // functionality with EnsureRunning. I think we should use options to merge
 // two function in the future.
-//
-// FIXME(fuweid):
-//
-// How to close the link after close the store?
 func NewStoreFromAttach() (_ *Store, retErr error) {
 	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(progByteCode))
 	if err != nil {
@@ -63,7 +59,7 @@ func NewStoreFromAttach() (_ *Store, retErr error) {
 		}
 	}()
 
-	_, err = link.AttachRawTracepoint(link.RawTracepointOptions{
+	link, err := link.AttachRawTracepoint(link.RawTracepointOptions{
 		Name:    "sched_process_exit",
 		Program: collection.Programs[bpfProgName],
 	})
@@ -74,6 +70,7 @@ func NewStoreFromAttach() (_ *Store, retErr error) {
 	return &Store{
 		tracingTasks: collection.Maps[bpfMapTracingTasks],
 		exitedEvents: collection.Maps[bpfMapExitedEvents],
+		link:         link,
 	}, nil
 }
 
