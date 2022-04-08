@@ -9,11 +9,13 @@ import (
 
 	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
 
+	"github.com/containerd/cgroups"
 	"github.com/containerd/console"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/runtime"
+	"github.com/containerd/typeurl"
 	ptypes "github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -26,7 +28,9 @@ type shim struct {
 
 	mu     sync.Mutex
 	bundle *pkgbundle.Bundle
-	init   *initProcess
+
+	init *initProcess
+	cg   interface{}
 
 	execProcesses   map[string]runtime.Process
 	reservedExecIDs map[string]struct{}
@@ -89,6 +93,17 @@ func (s *shim) Create(ctx context.Context, opts runtime.CreateOpts) (_ runtime.T
 
 	if err := s.manager.traceInitProcess(s.init); err != nil {
 		return nil, err
+	}
+
+	if pid := int(s.PID()); pid > 0 {
+		// TODO(fuweid):
+		//
+		// Support cgroupV2 if environment is ready.
+		cg, err := cgroups.Load(cgroups.V1, cgroups.PidPath(pid))
+		if err != nil {
+			log.G(ctx).WithError(err).Errorf("loading cgroup for %d", pid)
+		}
+		s.cg = cg
 	}
 	return s, nil
 }
@@ -191,7 +206,21 @@ func (s *shim) Update(ctx context.Context, resources *ptypes.Any, _ map[string]s
 }
 
 func (s *shim) Stats(ctx context.Context) (*ptypes.Any, error) {
-	return nil, fmt.Errorf("Stats not implemented yet")
+	cgx := s.cg
+	if cgx == nil {
+		return nil, fmt.Errorf("cgroup does not exist: %w", errdefs.ErrNotFound)
+	}
+
+	switch cg := cgx.(type) {
+	case cgroups.Cgroup:
+		stats, err := cg.Stat(cgroups.IgnoreNotExist)
+		if err != nil {
+			return nil, err
+		}
+		return typeurl.MarshalAny(stats)
+	default:
+		return nil, fmt.Errorf("unsupported cgroup type %T: %w", cg, errdefs.ErrNotImplemented)
+	}
 }
 
 func (s *shim) Process(ctx context.Context, id string) (runtime.Process, error) {
