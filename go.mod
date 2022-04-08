@@ -4,6 +4,7 @@ go 1.16
 
 require (
 	github.com/cilium/ebpf v0.8.0
+	github.com/containerd/cgroups v1.0.1
 	github.com/containerd/console v1.0.2
 	github.com/containerd/containerd v1.5.0
 	github.com/containerd/fifo v1.0.0
