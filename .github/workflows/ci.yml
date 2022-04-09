@@ -35,11 +35,11 @@ jobs:
           echo "GOPATH=${{ github.workspace }}" >> $GITHUB_ENV
           echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
 
-      - name: install dependencies
+      - name: install system dependencies
         working-directory: src/github.com/fuweid/embedshim
         shell: bash
         run: |
-          echo "::group:: install dependencies"
+          echo "::group:: install system dependencies"
           echo "deb http://apt.llvm.org/focal/ llvm-toolchain-focal main" | sudo tee -a /etc/apt/sources.list
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           sudo apt-get update -y
@@ -63,7 +63,6 @@ jobs:
           version: v1.44.2
           args: --timeout=5m
           working-directory: src/github.com/fuweid/embedshim
-
 
   #
   # Project checker
@@ -116,3 +115,95 @@ jobs:
           [ ! -z "${DCO_RANGE}" ] && range="-range ${DCO_RANGE}"
           git-validation ${DCO_VERBOSITY} ${range} -run DCO,short-subject,dangling-whitespace
           echo "::endgroup::"
+
+  #
+  # CRI Integration
+  #
+  cri-integration:
+    name: CRI Integration
+    runs-on: ubuntu-20.04
+    timeout-minutes: 20
+    needs: [project, linters]
+
+    strategy:
+      matrix:
+        go-version: [1.17.x]
+
+    steps:
+      - uses: actions/setup-go@v2
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - uses: actions/checkout@v2
+        with:
+          path: src/github.com/fuweid/embedshim
+          submodules: 'true'
+
+      - name: set env
+        shell: bash
+        run: |
+          echo "GOPATH=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
+
+      - name: install system dependencies
+        working-directory: src/github.com/fuweid/embedshim
+        shell: bash
+        run: |
+          echo "::group:: install system dependencies"
+          echo "deb http://apt.llvm.org/focal/ llvm-toolchain-focal main" | sudo tee -a /etc/apt/sources.list
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential rsync binutils-dev elfutils libcap-dev libelf-dev libdw-dev python3-docutils
+          sudo apt-get install -y g++ libelf-dev clang lld llvm
+          echo "::endgroup::"
+
+      - name: install containerd dependencies
+        working-directory: src/github.com/fuweid/embedshim
+        shell: bash
+        run: |
+          echo "::group:: install containerd dependencies"
+          go install github.com/onsi/ginkgo/ginkgo@latest
+          bash -x script/setup_containerd_dependencies.sh
+          echo "::endgroup::"
+
+      - name: build embedshim
+        working-directory: src/github.com/fuweid/embedshim
+        shell: bash
+        run: |
+          make
+          sudo install bin/embedshim-containerd /usr/local/bin/containerd
+          sudo install bin/embedshim-runcext /usr/local/bin
+
+      - name: CRI Test
+        shell: bash
+        run: |
+          BDIR="$(mktemp -d -p $PWD)"
+          mkdir -p ${BDIR}/{root,state}
+          cat > ${BDIR}/config.toml <<EOF
+            version = 2
+            [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+              runtime_type = "io.containerd.runtime.v1.embed"
+          EOF
+
+          sudo -E PATH=$PATH /usr/local/bin/containerd \
+            -a ${BDIR}/c.sock \
+            --config ${BDIR}/config.toml \
+            --root ${BDIR}/root \
+            --state ${BDIR}/state \
+            --log-level debug &> ${BDIR}/containerd-cri.log &
+
+          set +e
+          sudo -E PATH=$PATH /usr/local/bin/ctr -a ${BDIR}/c.sock version
+          sudo -E PATH=$PATH critest \
+            --report-dir "${{github.workspace}}/critestreport" \
+            --runtime-endpoint=unix:///${BDIR}/c.sock --parallel=8
+          TEST_RC=$?
+          set -e
+
+          test $TEST_RC -ne 0 && cat ${BDIR}/containerd-cri.log
+          sudo pkill -9 containerd
+
+          sudo -E umount ${BDIR}/root/io.containerd.runtime.v1.embed/.exitsnoop.bpf
+          sudo -E rm -rf ${BDIR}
+
+          test $TEST_RC -eq 0 || /bin/false
