@@ -39,6 +39,7 @@ $ git clone https://github.com/fuweid/embedshim.git
 $ cd embedshim
 $ git submodule update --init --recursive
 $ make
+$ sudo make install
 ```
 
 The binary is named by `embedshim-containerd` which has full functionality in
