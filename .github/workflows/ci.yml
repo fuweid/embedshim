@@ -171,8 +171,7 @@ jobs:
         shell: bash
         run: |
           make
-          sudo install bin/embedshim-containerd /usr/local/bin/containerd
-          sudo install bin/embedshim-runcext /usr/local/bin
+          sudo make install
 
       - name: CRI Test
         shell: bash
@@ -185,7 +184,7 @@ jobs:
               runtime_type = "io.containerd.runtime.v1.embed"
           EOF
 
-          sudo -E PATH=$PATH /usr/local/bin/containerd \
+          sudo -E PATH=$PATH /usr/local/bin/embedshim-containerd \
             -a ${BDIR}/c.sock \
             --config ${BDIR}/config.toml \
             --root ${BDIR}/root \
@@ -201,7 +200,7 @@ jobs:
           set -e
 
           test $TEST_RC -ne 0 && cat ${BDIR}/containerd-cri.log
-          sudo pkill -9 containerd
+          sudo kill -9 $(pidof embedshim-containerd)
 
           sudo -E umount ${BDIR}/root/io.containerd.runtime.v1.embed/.exitsnoop.bpf
           sudo -E rm -rf ${BDIR}
