@@ -10,6 +10,7 @@ import (
 	pkgbundle "github.com/fuweid/embedshim/pkg/bundle"
 
 	"github.com/containerd/cgroups"
+	cgroupsv2 "github.com/containerd/cgroups/v2"
 	"github.com/containerd/console"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/log"
@@ -96,13 +97,27 @@ func (s *shim) Create(ctx context.Context, opts runtime.CreateOpts) (_ runtime.T
 	}
 
 	if pid := int(s.PID()); pid > 0 {
-		// TODO(fuweid):
-		//
-		// Support cgroupV2 if environment is ready.
-		cg, err := cgroups.Load(cgroups.V1, cgroups.PidPath(pid))
-		if err != nil {
-			log.G(ctx).WithError(err).Errorf("loading cgroup for %d", pid)
-		}
+		var cg interface{}
+		var err error
+		func() {
+			if cgroups.Mode() == cgroups.Unified {
+				g, err := cgroupsv2.PidGroupPath(pid)
+				if err != nil {
+					logrus.WithError(err).Errorf("loading cgroup2 for %d", pid)
+					return
+				}
+
+				cg, err = cgroupsv2.LoadManager("/sys/fs/cgroup", g)
+				if err != nil {
+					logrus.WithError(err).Errorf("loading cgroup2 for %d", pid)
+				}
+			} else {
+				cg, err = cgroups.Load(cgroups.V1, cgroups.PidPath(pid))
+				if err != nil {
+					logrus.WithError(err).Errorf("loading cgroup for %d", pid)
+				}
+			}
+		}()
 		s.cg = cg
 	}
 	return s, nil
@@ -211,16 +226,25 @@ func (s *shim) Stats(ctx context.Context) (*ptypes.Any, error) {
 		return nil, fmt.Errorf("cgroup does not exist: %w", errdefs.ErrNotFound)
 	}
 
+	var statsx interface{}
 	switch cg := cgx.(type) {
 	case cgroups.Cgroup:
 		stats, err := cg.Stat(cgroups.IgnoreNotExist)
 		if err != nil {
 			return nil, err
 		}
-		return typeurl.MarshalAny(stats)
+		statsx = stats
+	case *cgroupsv2.Manager:
+		stats, err := cg.Stat()
+		if err != nil {
+			return nil, err
+		}
+		statsx = stats
 	default:
 		return nil, fmt.Errorf("unsupported cgroup type %T: %w", cg, errdefs.ErrNotImplemented)
 	}
+
+	return typeurl.MarshalAny(statsx)
 }
 
 func (s *shim) Process(ctx context.Context, id string) (runtime.Process, error) {
