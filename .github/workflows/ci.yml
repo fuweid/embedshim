@@ -44,7 +44,7 @@ jobs:
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           sudo apt-get update -y
           sudo apt-get install -y build-essential rsync binutils-dev elfutils libcap-dev libelf-dev libdw-dev python3-docutils
-          sudo apt-get install -y g++ libelf-dev clang lld llvm
+          sudo apt-get install -y g++ libelf-dev clang lld llvm gperf
           echo "::endgroup::"
 
       - name: generate bpf binary
@@ -154,7 +154,7 @@ jobs:
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           sudo apt-get update -y
           sudo apt-get install -y build-essential rsync binutils-dev elfutils libcap-dev libelf-dev libdw-dev python3-docutils
-          sudo apt-get install -y g++ libelf-dev clang lld llvm
+          sudo apt-get install -y g++ libelf-dev clang lld llvm gperf
           echo "::endgroup::"
 
       - name: install containerd dependencies
