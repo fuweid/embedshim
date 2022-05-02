@@ -3,7 +3,12 @@
 set -euo pipefail
 
 readonly ROOT_DIR="$(cd -- "$(dirname -- "$0")/.." > /dev/null 2>&1; pwd -P)"
-readonly CONTAINERD_COMMIT=$(grep github.com/containerd/containerd "${ROOT_DIR}"/go.mod | awk '{print $2}')
+
+# FIXME(fuweid):
+#
+# Since new release doesn't come out, use pinned v1.5.12 to install dependencies.
+# In the future, I think we should maintain the scripts.
+readonly CONTAINERD_COMMIT=v1.5.11
 
 readonly TMP_DIR="$(mktemp -d)"
 
