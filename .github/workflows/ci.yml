@@ -121,14 +121,17 @@ jobs:
   #
   cri-integration:
     name: CRI Integration
-    runs-on: ubuntu-20.04
     timeout-minutes: 20
     needs: [project, linters]
 
     strategy:
+      # ubuntu-22.04 is used to test cgroupv2
+      # ubuntu-20.04 is for cgroupv1 (common)
       matrix:
         go-version: [1.17.x]
+        os: [ubuntu-20.04, ubuntu-22.04]
 
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/setup-go@v2
         with:
