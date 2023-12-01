@@ -1,5 +1,9 @@
 # embedshim
 
+> Update: containerd [removes shim.v1 interface](https://github.com/containerd/containerd/pull/8262)
+> and introduces [sandbox API](https://github.com/containerd/containerd/issues/9431).
+> This project will be migrated into standalone sandbox API after containerd 2.0 releases.
+
 The embedshim is the kind of task runtime implementation, which can be used as
 plugin in containerd.
 
