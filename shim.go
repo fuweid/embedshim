@@ -276,6 +276,8 @@ func (s *shim) State(ctx context.Context) (runtime.State, error) {
 		status = runtime.CreatedStatus
 	case "running":
 		status = runtime.RunningStatus
+	case "paused":
+		status = runtime.PausedStatus
 	case "stopped":
 		status = runtime.StoppedStatus
 	}
