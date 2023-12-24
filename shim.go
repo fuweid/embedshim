@@ -135,12 +135,12 @@ func (s *shim) Namespace() string {
 	return s.bundle.Namespace
 }
 
-func (s *shim) Pause(_ context.Context) error {
-	return fmt.Errorf("pause not implemented yet")
+func (s *shim) Pause(ctx context.Context) error {
+	return s.init.Pause(ctx)
 }
 
-func (s *shim) Resume(_ context.Context) error {
-	return fmt.Errorf("resume not implemented yet")
+func (s *shim) Resume(ctx context.Context) error {
+	return s.init.Resume(ctx)
 }
 
 func (s *shim) Start(ctx context.Context) error {

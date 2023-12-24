@@ -356,12 +356,22 @@ func (p *initProcess) Pause(ctx context.Context) error {
 	return p.initState.Pause(ctx)
 }
 
+func (p *initProcess) pause(ctx context.Context) error {
+	err := p.runtime.Pause(ctx, p.ID())
+	return p.runtimeError(err, "OCI runtime pause failed")
+}
+
 // Resume the init process and all its child processes
 func (p *initProcess) Resume(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	return p.initState.Resume(ctx)
+}
+
+func (p *initProcess) resume(ctx context.Context) error {
+	err := p.runtime.Resume(ctx, p.ID())
+	return p.runtimeError(err, "OCI runtime resume failed")
 }
 
 // Kill the init process
