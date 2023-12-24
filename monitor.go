@@ -182,9 +182,6 @@ func (m *monitor) repollingInitProcess(init *initProcess) (retErr error) {
 
 	// Just in case, the pid has been reused by other init process
 	if taskInfo != nil && taskInfo.TraceID == eventID {
-		// TODO(fuweid): Ugly! Need interface here.
-		init.initState.(*createdState).transition("running")
-
 		return m.pidPoller.Add(fd, func() error {
 			// TODO(fuweid): do we need to check the pid value in event?
 			exitedStatus, err = m.initStore.GetExitedEvent(init.traceEventID)

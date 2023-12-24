@@ -509,3 +509,25 @@ func waitTimeout(ctx context.Context, wg *sync.WaitGroup, timeout time.Duration)
 		return ctx.Err()
 	}
 }
+
+func (p *initProcess) reload(ctx context.Context) error {
+	pid, err := newInitPidFile(p.bundle).Read()
+	if err != nil {
+		return fmt.Errorf("failed to read container pidfile: %w", err)
+	}
+	p.pid = pid
+
+	c, err := p.runtime.State(ctx, p.ID())
+	if err != nil {
+		return fmt.Errorf("failed to read container state: %w", err)
+	}
+	switch c.Status {
+	case "running":
+		p.initState = &runningState{p: p}
+	case "stopped":
+		p.initState = &stoppedState{p: p}
+	case "paused":
+		p.initState = &pausedState{p: p}
+	}
+	return nil
+}
