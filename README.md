@@ -1,25 +1,27 @@
 # embedshim
 
-> Update: containerd [removes shim.v1 interface](https://github.com/containerd/containerd/pull/8262)
-> and introduces [sandbox API](https://github.com/containerd/containerd/issues/9431).
-> This project will be migrated into standalone sandbox API after containerd 2.0 releases.
+> Update: containerd
+> [removes shim.v1 interface](https://github.com/containerd/containerd/pull/8262)
+> and introduces
+> [sandbox API](https://github.com/containerd/containerd/issues/9431). This
+> project will be migrated into standalone sandbox API after containerd 2.0
+> releases.
 
 The embedshim is the kind of task runtime implementation, which can be used as
 plugin in containerd.
 
 With current shim design, it is used to manage the lifecycle of container
-process and allow to be reconnected after containerd restart. The one of the
-key design elements of a small shim is to be a container process monitoring,
-at least it is important to containerd created by runC-like runtime.
+process and allow to be reconnected after containerd restart. The one of the key
+design elements of a small shim is to be a container process monitoring, at
+least it is important to containerd created by runC-like runtime.
 
 Without pidfd and ebpf trace point feature, it is unlikely to receive exit
 notification in time and receive exit code correctly as non-parents after shim
-dies. And in kubernetes infra, even if the containers in pod can share one
-shim, the VmRSS of shim(Go Runtime) is still about 8MB.
+dies. And in kubernetes infra, even if the containers in pod can share one shim,
+the VmRSS of shim(Go Runtime) is still about 8MB.
 
-So, this plugin aims to provide task runtime implementation with pidfd and
-eBPF sched_process_exit tracepoint to manage deamonless container with
-low overhead.
+So, this plugin aims to provide task runtime implementation with pidfd and eBPF
+sched_process_exit tracepoint to manage deamonless container with low overhead.
 
 ![embedshim-overview](docs/images/embedshim-overview.svg)
 
@@ -27,7 +29,8 @@ low overhead.
 
 ## Build/Install
 
-The embedshim needs to compile bpf with clang/llvm. So install clang/llvm as first.
+The embedshim needs to compile bpf with clang/llvm. So install clang/llvm as
+first.
 
 ```bash
 $ echo "deb http://apt.llvm.org/focal/ llvm-toolchain-focal main" | sudo tee -a /etc/apt/sources.lis
@@ -63,10 +66,9 @@ io.containerd.runtime.v1        embed                    linux/amd64    ok
 
 ## Status
 
-The embedshim supports to run container in headless or with input.
-But it still works in progress, do not use in production.
+The embedshim supports to run container in headless or with input. But it still
+works in progress, do not use in production.
 
-* [ ] Support Pause/Resume
 * [ ] Task Event(Create/Start/Exit/Delete/OOM) support
 
 ## Requirements
@@ -77,5 +79,7 @@ But it still works in progress, do not use in production.
 
 ## License
 
-* The user space components are licensed under [the Apache License, Version 2.0](LICENSE).
-* The BPF code are under [the General Public License, Version 2.0](bpf/COPYING).
+* The user space components are licensed under
+  [the Apache License, Version 2.0](LICENSE).
+* The BPF code are under
+  [the General Public License, Version 2.0](bpf/COPYING).
