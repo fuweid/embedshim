@@ -437,7 +437,7 @@ func (p *initProcess) exec(ctx context.Context, execID string, opts runtime.Exec
 }
 
 // Checkpoint the init process
-func (p *initProcess) Checkpoint(ctx context.Context, r *CheckpointConfig) error {
+func (p *initProcess) Checkpoint(_ context.Context, _ *CheckpointConfig) error {
 	return fmt.Errorf("checkpoint not implemented yet")
 }
 

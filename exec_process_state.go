@@ -82,7 +82,7 @@ func (s *execCreatedState) SetExited(status int) {
 	}
 }
 
-func (s *execCreatedState) Status(ctx context.Context) (string, error) {
+func (s *execCreatedState) Status(_ context.Context) (string, error) {
 	return "created", nil
 }
 
@@ -104,11 +104,11 @@ func (s *execRunningState) Resize(ws console.WinSize) error {
 	return s.p.resize(ws)
 }
 
-func (s *execRunningState) Start(ctx context.Context) error {
+func (s *execRunningState) Start(_ context.Context) error {
 	return fmt.Errorf("cannot start a running process")
 }
 
-func (s *execRunningState) Delete(ctx context.Context) error {
+func (s *execRunningState) Delete(_ context.Context) error {
 	return fmt.Errorf("cannot delete a running process")
 }
 
@@ -124,7 +124,7 @@ func (s *execRunningState) SetExited(status int) {
 	}
 }
 
-func (s *execRunningState) Status(ctx context.Context) (string, error) {
+func (s *execRunningState) Status(_ context.Context) (string, error) {
 	return "running", nil
 }
 
@@ -142,11 +142,11 @@ func (s *execStoppedState) transition(name string) error {
 	return nil
 }
 
-func (s *execStoppedState) Resize(ws console.WinSize) error {
+func (s *execStoppedState) Resize(_ console.WinSize) error {
 	return fmt.Errorf("cannot resize a stopped container")
 }
 
-func (s *execStoppedState) Start(ctx context.Context) error {
+func (s *execStoppedState) Start(_ context.Context) error {
 	return fmt.Errorf("cannot start a stopped process")
 }
 
@@ -162,10 +162,10 @@ func (s *execStoppedState) Kill(ctx context.Context, sig uint32, all bool) error
 	return s.p.kill(ctx, sig, all)
 }
 
-func (s *execStoppedState) SetExited(status int) {
+func (s *execStoppedState) SetExited(_ int) {
 	// no op
 }
 
-func (s *execStoppedState) Status(ctx context.Context) (string, error) {
+func (s *execStoppedState) Status(_ context.Context) (string, error) {
 	return "stopped", nil
 }

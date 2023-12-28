@@ -135,11 +135,11 @@ func (s *shim) Namespace() string {
 	return s.bundle.Namespace
 }
 
-func (s *shim) Pause(ctx context.Context) error {
+func (s *shim) Pause(_ context.Context) error {
 	return fmt.Errorf("pause not implemented yet")
 }
 
-func (s *shim) Resume(ctx context.Context) error {
+func (s *shim) Resume(_ context.Context) error {
 	return fmt.Errorf("resume not implemented yet")
 }
 
@@ -173,20 +173,20 @@ func (s *shim) Exec(ctx context.Context, execID string, opts runtime.ExecOpts) (
 	return process, nil
 }
 
-func (s *shim) Pids(ctx context.Context) ([]runtime.ProcessInfo, error) {
+func (s *shim) Pids(_ context.Context) ([]runtime.ProcessInfo, error) {
 	return []runtime.ProcessInfo{
 		{Pid: s.PID()},
 	}, nil
 }
 
-func (s *shim) ResizePty(ctx context.Context, size runtime.ConsoleSize) error {
+func (s *shim) ResizePty(_ context.Context, size runtime.ConsoleSize) error {
 	return s.init.Resize(console.WinSize{
 		Width:  uint16(size.Width),
 		Height: uint16(size.Height),
 	})
 }
 
-func (s *shim) CloseIO(ctx context.Context) error {
+func (s *shim) CloseIO(_ context.Context) error {
 	if stdin := s.init.Stdin(); stdin != nil {
 		if err := stdin.Close(); err != nil {
 			return err
@@ -195,7 +195,7 @@ func (s *shim) CloseIO(ctx context.Context) error {
 	return nil
 }
 
-func (s *shim) Wait(ctx context.Context) (*runtime.Exit, error) {
+func (s *shim) Wait(_ context.Context) (*runtime.Exit, error) {
 	taskPid := s.PID()
 
 	// TODO: use ctx
@@ -208,7 +208,7 @@ func (s *shim) Wait(ctx context.Context) (*runtime.Exit, error) {
 	}, nil
 }
 
-func (s *shim) Checkpoint(ctx context.Context, path string, options *ptypes.Any) error {
+func (s *shim) Checkpoint(_ context.Context, _ string, _ *ptypes.Any) error {
 	return fmt.Errorf("checkpoint not implemented yet")
 }
 
@@ -220,7 +220,7 @@ func (s *shim) Update(ctx context.Context, resources *ptypes.Any, _ map[string]s
 	return s.init.Update(ctx, resources)
 }
 
-func (s *shim) Stats(ctx context.Context) (*ptypes.Any, error) {
+func (s *shim) Stats(_ context.Context) (*ptypes.Any, error) {
 	cgx := s.cg
 	if cgx == nil {
 		return nil, fmt.Errorf("cgroup does not exist: %w", errdefs.ErrNotFound)

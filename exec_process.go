@@ -108,7 +108,7 @@ func (e *execProcess) setExited(status int) {
 	close(e.waitBlock)
 }
 
-func (e *execProcess) CloseIO(ctx context.Context) error {
+func (e *execProcess) CloseIO(_ context.Context) error {
 	if stdin := e.Stdin(); stdin != nil {
 		if err := stdin.Close(); err != nil {
 			return err
@@ -214,7 +214,7 @@ func (e *execProcess) Kill(ctx context.Context, sig uint32, _ bool) error {
 	return e.execState.Kill(ctx, sig, false)
 }
 
-func (e *execProcess) kill(ctx context.Context, sig uint32, _ bool) error {
+func (e *execProcess) kill(_ context.Context, sig uint32, _ bool) error {
 	pid := e.pid.get()
 	switch {
 	case pid == 0:
