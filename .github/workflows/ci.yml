@@ -70,7 +70,7 @@ jobs:
   # based on https://github.com/containerd/project-checks/blob/main/action.yml
   project:
     name: Project Checks
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 5
 
     steps:
