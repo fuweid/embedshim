@@ -60,7 +60,7 @@ jobs:
       - name: golangci-lint check
         uses: golangci/golangci-lint-action@v3
         with:
-          version: v1.44.2
+          version: v1.55.2
           args: --timeout=5m
           working-directory: src/github.com/fuweid/embedshim
 
