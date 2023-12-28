@@ -29,46 +29,46 @@ import (
 type deletedState struct {
 }
 
-func (s *deletedState) Pause(ctx context.Context) error {
+func (s *deletedState) Pause(_ context.Context) error {
 	return fmt.Errorf("cannot pause a deleted process")
 }
 
-func (s *deletedState) Resume(ctx context.Context) error {
+func (s *deletedState) Resume(_ context.Context) error {
 	return fmt.Errorf("cannot resume a deleted process")
 }
 
-func (s *deletedState) Update(context context.Context, r *google_protobuf.Any) error {
+func (s *deletedState) Update(_ context.Context, _ *google_protobuf.Any) error {
 	return fmt.Errorf("cannot update a deleted process")
 }
 
-func (s *deletedState) Checkpoint(ctx context.Context, r *CheckpointConfig) error {
+func (s *deletedState) Checkpoint(_ context.Context, _ *CheckpointConfig) error {
 	return fmt.Errorf("cannot checkpoint a deleted process")
 }
 
-func (s *deletedState) Resize(ws console.WinSize) error {
+func (s *deletedState) Resize(_ console.WinSize) error {
 	return fmt.Errorf("cannot resize a deleted process")
 }
 
-func (s *deletedState) Start(ctx context.Context) error {
+func (s *deletedState) Start(_ context.Context) error {
 	return fmt.Errorf("cannot start a deleted process")
 }
 
-func (s *deletedState) Delete(ctx context.Context) error {
+func (s *deletedState) Delete(_ context.Context) error {
 	return fmt.Errorf("cannot delete a deleted process: %w", errdefs.ErrNotFound)
 }
 
-func (s *deletedState) Kill(ctx context.Context, sig uint32, all bool) error {
+func (s *deletedState) Kill(_ context.Context, _ uint32, _ bool) error {
 	return fmt.Errorf("cannot kill a deleted process: %w", errdefs.ErrNotFound)
 }
 
-func (s *deletedState) SetExited(status int) {
+func (s *deletedState) SetExited(_ int) {
 	// no op
 }
 
-func (s *deletedState) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
+func (s *deletedState) Exec(_ context.Context, _ string, _ runtime.ExecOpts) (runtime.Process, error) {
 	return nil, fmt.Errorf("cannot exec in a deleted state")
 }
 
-func (s *deletedState) Status(ctx context.Context) (string, error) {
+func (s *deletedState) Status(_ context.Context) (string, error) {
 	return "stopped", nil
 }

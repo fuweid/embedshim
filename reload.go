@@ -88,7 +88,7 @@ func (manager *TaskManager) loadTasks(ctx context.Context) error {
 	return nil
 }
 
-func (manager *TaskManager) loadShim(ctx context.Context, bundle *pkgbundle.Bundle) (_ *shim, retErr error) {
+func (manager *TaskManager) loadShim(_ context.Context, bundle *pkgbundle.Bundle) (_ *shim, retErr error) {
 	init, err := renewInitProcess(bundle)
 	if err != nil {
 		return nil, err

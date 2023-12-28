@@ -52,10 +52,7 @@ func newApp() *cli.App {
 	}
 	app.Commands = append(app.Commands, execCommand)
 	app.Before = func(_ *cli.Context) error {
-		if err := reaper.SetSubreaper(1); err != nil {
-			return err
-		}
-		return nil
+		return reaper.SetSubreaper(1)
 	}
 	return app
 }

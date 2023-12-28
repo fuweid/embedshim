@@ -69,11 +69,11 @@ func (s *createdState) transition(name string) error {
 	return nil
 }
 
-func (s *createdState) Pause(ctx context.Context) error {
+func (s *createdState) Pause(_ context.Context) error {
 	return fmt.Errorf("cannot pause task in created state")
 }
 
-func (s *createdState) Resume(ctx context.Context) error {
+func (s *createdState) Resume(_ context.Context) error {
 	return fmt.Errorf("cannot resume task in created state")
 }
 
@@ -81,7 +81,7 @@ func (s *createdState) Update(ctx context.Context, r *google_protobuf.Any) error
 	return s.p.update(ctx, r)
 }
 
-func (s *createdState) Checkpoint(ctx context.Context, r *CheckpointConfig) error {
+func (s *createdState) Checkpoint(_ context.Context, _ *CheckpointConfig) error {
 	return fmt.Errorf("cannot checkpoint a task in created state")
 }
 
@@ -115,7 +115,7 @@ func (s *createdState) Exec(ctx context.Context, id string, opts runtime.ExecOpt
 	return s.p.exec(ctx, id, opts)
 }
 
-func (s *createdState) Status(ctx context.Context) (string, error) {
+func (s *createdState) Status(_ context.Context) (string, error) {
 	return "created", nil
 }
 
@@ -135,11 +135,11 @@ func (s *runningState) transition(name string) error {
 	return nil
 }
 
-func (s *runningState) Pause(ctx context.Context) error {
+func (s *runningState) Pause(_ context.Context) error {
 	return fmt.Errorf("pause not implemented yet")
 }
 
-func (s *runningState) Resume(ctx context.Context) error {
+func (s *runningState) Resume(_ context.Context) error {
 	return fmt.Errorf("cannot resume a running process")
 }
 
@@ -147,15 +147,15 @@ func (s *runningState) Update(ctx context.Context, r *google_protobuf.Any) error
 	return s.p.update(ctx, r)
 }
 
-func (s *runningState) Checkpoint(ctx context.Context, r *CheckpointConfig) error {
+func (s *runningState) Checkpoint(_ context.Context, _ *CheckpointConfig) error {
 	return fmt.Errorf("checkpoint not implemented yet")
 }
 
-func (s *runningState) Start(ctx context.Context) error {
+func (s *runningState) Start(_ context.Context) error {
 	return fmt.Errorf("cannot start a running process")
 }
 
-func (s *runningState) Delete(ctx context.Context) error {
+func (s *runningState) Delete(_ context.Context) error {
 	return fmt.Errorf("cannot delete a running process")
 }
 
@@ -175,7 +175,7 @@ func (s *runningState) Exec(ctx context.Context, id string, opts runtime.ExecOpt
 	return s.p.exec(ctx, id, opts)
 }
 
-func (s *runningState) Status(ctx context.Context) (string, error) {
+func (s *runningState) Status(_ context.Context) (string, error) {
 	return "running", nil
 }
 
@@ -195,11 +195,11 @@ func (s *pausedState) transition(name string) error {
 	return nil
 }
 
-func (s *pausedState) Pause(ctx context.Context) error {
+func (s *pausedState) Pause(_ context.Context) error {
 	return fmt.Errorf("cannot pause a paused container")
 }
 
-func (s *pausedState) Resume(ctx context.Context) error {
+func (s *pausedState) Resume(_ context.Context) error {
 	return fmt.Errorf("resume not implemented yet")
 }
 
@@ -207,15 +207,15 @@ func (s *pausedState) Update(ctx context.Context, r *google_protobuf.Any) error 
 	return s.p.update(ctx, r)
 }
 
-func (s *pausedState) Checkpoint(ctx context.Context, r *CheckpointConfig) error {
+func (s *pausedState) Checkpoint(_ context.Context, _ *CheckpointConfig) error {
 	return fmt.Errorf("checkpoint not implemented yet")
 }
 
-func (s *pausedState) Start(ctx context.Context) error {
+func (s *pausedState) Start(_ context.Context) error {
 	return fmt.Errorf("cannot start a paused process")
 }
 
-func (s *pausedState) Delete(ctx context.Context) error {
+func (s *pausedState) Delete(_ context.Context) error {
 	return fmt.Errorf("cannot delete a paused process")
 }
 
@@ -235,11 +235,11 @@ func (s *pausedState) SetExited(status int) {
 	}
 }
 
-func (s *pausedState) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
+func (s *pausedState) Exec(_ context.Context, _ string, _ runtime.ExecOpts) (runtime.Process, error) {
 	return nil, fmt.Errorf("cannot exec in a paused state")
 }
 
-func (s *pausedState) Status(ctx context.Context) (string, error) {
+func (s *pausedState) Status(_ context.Context) (string, error) {
 	return "paused", nil
 }
 
@@ -257,23 +257,23 @@ func (s *stoppedState) transition(name string) error {
 	return nil
 }
 
-func (s *stoppedState) Pause(ctx context.Context) error {
+func (s *stoppedState) Pause(_ context.Context) error {
 	return fmt.Errorf("cannot pause a stopped container")
 }
 
-func (s *stoppedState) Resume(ctx context.Context) error {
+func (s *stoppedState) Resume(_ context.Context) error {
 	return fmt.Errorf("cannot resume a stopped container")
 }
 
-func (s *stoppedState) Update(ctx context.Context, r *google_protobuf.Any) error {
+func (s *stoppedState) Update(_ context.Context, _ *google_protobuf.Any) error {
 	return fmt.Errorf("cannot update a stopped container")
 }
 
-func (s *stoppedState) Checkpoint(ctx context.Context, r *CheckpointConfig) error {
+func (s *stoppedState) Checkpoint(_ context.Context, _ *CheckpointConfig) error {
 	return fmt.Errorf("cannot checkpoint a stopped container")
 }
 
-func (s *stoppedState) Start(ctx context.Context) error {
+func (s *stoppedState) Start(_ context.Context) error {
 	return fmt.Errorf("cannot start a stopped process")
 }
 
@@ -288,15 +288,15 @@ func (s *stoppedState) Kill(ctx context.Context, sig uint32, all bool) error {
 	return s.p.kill(ctx, sig, all)
 }
 
-func (s *stoppedState) SetExited(status int) {
+func (s *stoppedState) SetExited(_ int) {
 	// no op
 }
 
-func (s *stoppedState) Exec(ctx context.Context, id string, opts runtime.ExecOpts) (runtime.Process, error) {
+func (s *stoppedState) Exec(_ context.Context, _ string, _ runtime.ExecOpts) (runtime.Process, error) {
 	return nil, fmt.Errorf("cannot exec in a stopped state")
 }
 
-func (s *stoppedState) Status(ctx context.Context) (string, error) {
+func (s *stoppedState) Status(_ context.Context) (string, error) {
 	return "stopped", nil
 }
 

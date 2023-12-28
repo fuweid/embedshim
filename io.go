@@ -176,7 +176,7 @@ func (p *processIO) CopyStdin() error {
 	return nil
 }
 
-func createIO(ctx context.Context, id string, ioUID, ioGID int, stdio stdio.Stdio) (*processIO, error) {
+func createIO(_ context.Context, _ string, ioUID, ioGID int, stdio stdio.Stdio) (*processIO, error) {
 	pio := &processIO{
 		stdio: stdio,
 	}
@@ -289,7 +289,7 @@ func withConditionalIO(c stdio.Stdio) runc.IOOpt {
 	}
 }
 
-func openRWFifo(ctx context.Context, fn string, perm os.FileMode) (*os.File, error) {
+func openRWFifo(_ context.Context, fn string, perm os.FileMode) (*os.File, error) {
 	if _, err := os.Stat(fn); err != nil {
 		if os.IsNotExist(err) {
 			if err := syscall.Mkfifo(fn, uint32(perm&os.ModePerm)); err != nil && !os.IsExist(err) {
