@@ -135,8 +135,11 @@ func (s *runningState) transition(name string) error {
 	return nil
 }
 
-func (s *runningState) Pause(_ context.Context) error {
-	return fmt.Errorf("pause not implemented yet")
+func (s *runningState) Pause(ctx context.Context) error {
+	if err := s.p.pause(ctx); err != nil {
+		return err
+	}
+	return s.transition("paused")
 }
 
 func (s *runningState) Resume(_ context.Context) error {
@@ -199,8 +202,11 @@ func (s *pausedState) Pause(_ context.Context) error {
 	return fmt.Errorf("cannot pause a paused container")
 }
 
-func (s *pausedState) Resume(_ context.Context) error {
-	return fmt.Errorf("resume not implemented yet")
+func (s *pausedState) Resume(ctx context.Context) error {
+	if err := s.p.resume(ctx); err != nil {
+		return err
+	}
+	return s.transition("running")
 }
 
 func (s *pausedState) Update(ctx context.Context, r *google_protobuf.Any) error {

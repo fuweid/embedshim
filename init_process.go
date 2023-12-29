@@ -356,12 +356,22 @@ func (p *initProcess) Pause(ctx context.Context) error {
 	return p.initState.Pause(ctx)
 }
 
+func (p *initProcess) pause(ctx context.Context) error {
+	err := p.runtime.Pause(ctx, p.ID())
+	return p.runtimeError(err, "OCI runtime pause failed")
+}
+
 // Resume the init process and all its child processes
 func (p *initProcess) Resume(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	return p.initState.Resume(ctx)
+}
+
+func (p *initProcess) resume(ctx context.Context) error {
+	err := p.runtime.Resume(ctx, p.ID())
+	return p.runtimeError(err, "OCI runtime resume failed")
 }
 
 // Kill the init process
@@ -498,4 +508,26 @@ func waitTimeout(ctx context.Context, wg *sync.WaitGroup, timeout time.Duration)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (p *initProcess) reload(ctx context.Context) error {
+	pid, err := newInitPidFile(p.bundle).Read()
+	if err != nil {
+		return fmt.Errorf("failed to read container pidfile: %w", err)
+	}
+	p.pid = pid
+
+	c, err := p.runtime.State(ctx, p.ID())
+	if err != nil {
+		return fmt.Errorf("failed to read container state: %w", err)
+	}
+	switch c.Status {
+	case "running":
+		p.initState = &runningState{p: p}
+	case "stopped":
+		p.initState = &stoppedState{p: p}
+	case "paused":
+		p.initState = &pausedState{p: p}
+	}
+	return nil
 }
