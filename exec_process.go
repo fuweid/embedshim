@@ -412,7 +412,7 @@ func (e *execProcess) start(ctx context.Context) (retErr error) {
 	})
 	if invokeErr != nil {
 		close(e.waitBlock)
-		return e.parent.runtimeError(err, "OCI runtime exec failed")
+		return e.parent.runtimeError(invokeErr, "OCI runtime exec failed")
 	}
 	return nil
 }
