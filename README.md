@@ -76,6 +76,7 @@ works in progress, do not use in production.
 * raw tracepoint bpf >= kernel v4.18
 * CO-RE BTF vmlinux support >= kernel v5.4
 * pidfd polling >= kernel v5.3
+* bpf links >= kernel v5.7
 
 ## License
 
