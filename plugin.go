@@ -11,6 +11,7 @@ import (
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/events/exchange"
 	"github.com/containerd/containerd/identifiers"
+	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/metadata"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/platforms"
@@ -154,7 +155,27 @@ func (manager *TaskManager) Add(ctx context.Context, task runtime.Task) error {
 }
 
 func (manager *TaskManager) Delete(ctx context.Context, id string) {
-	manager.tasks.Delete(ctx, id)
+	var err error
+	defer func() {
+		if err != nil {
+			log.G(ctx).WithError(err).Errorf("failed to delete task %s", id)
+		}
+	}()
+
+	ns, err := namespaces.NamespaceRequired(ctx)
+	if err != nil {
+		return
+	}
+	bundle, err := pkgbundle.LoadBundle(manager.stateDir, ns, id)
+	if err != nil {
+		return
+	}
+	shim, err := manager.loadShim(ctx, bundle)
+	if err != nil {
+		return
+	}
+
+	shim.Delete(ctx)
 }
 
 func (manager *TaskManager) Tasks(ctx context.Context, all bool) ([]runtime.Task, error) {

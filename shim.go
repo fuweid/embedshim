@@ -304,7 +304,7 @@ func (s *shim) Delete(ctx context.Context) (*runtime.Exit, error) {
 	}
 
 	s.manager.cleanInitProcessTraceEvent(s.init)
-	s.manager.Delete(ctx, s.init.ID())
+	s.manager.tasks.Delete(ctx, s.init.ID())
 
 	return &runtime.Exit{
 		Pid:       uint32(s.init.pid),
